@@ -75,8 +75,8 @@ def signin_bahamut():
     """自動簽到巴哈姆特"""
     
     # 獲取認證資訊
-    username = os.getenv('BAHAMUT_USERNAME')
-    password = os.getenv('BAHAMUT_PASSWORD')
+    username = os.getenv('rucifa')
+    password = os.getenv('I85C8DmO&zoPEs4jrSPc')
     
     if not username or not password:
         error_msg = "缺少登入資訊 (BAHAMUT_USERNAME 或 BAHAMUT_PASSWORD)"
