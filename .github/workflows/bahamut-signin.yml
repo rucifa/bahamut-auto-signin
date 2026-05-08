@@ -14,21 +14,9 @@ jobs:
         uses: actions/checkout@v5
 
       - name: 設定 Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: 安裝 Chrome
-        uses: browser-actions/setup-chrome@latest
-        with:
-          chrome-version: stable
-
-      - name: 驗證 Chrome 安裝
-        run: |
-          echo "=== 檢查 Chrome 版本 ==="
-          google-chrome --version
-          echo "=== 檢查 ChromeDriver ==="
-          chromedriver --version || echo "ChromeDriver 由 webdriver-manager 管理"
 
       - name: 安裝 Python 依賴
         run: |
