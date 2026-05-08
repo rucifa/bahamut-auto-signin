@@ -1,4 +1,3 @@
-# 複製下面的完整內容
 import os
 import sys
 import smtplib
