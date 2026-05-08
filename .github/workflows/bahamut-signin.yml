@@ -8,48 +8,33 @@ on:
 jobs:
   signin:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 檢出代碼
         uses: actions/checkout@v4
-      
+
       - name: 設定 Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      
-      - name: 安裝系統依賴和 Chrome
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            chromium-browser \
-            chromium-chromedriver \
-            libxss1 \
-            libappindicator1 \
-            libindicator7 \
-            fonts-liberation \
-            libgbm1 \
-            libgconf-2-4 \
-            libnss3 \
-            xdg-utils
-          
-          sudo ln -sf /usr/bin/chromium-browser /usr/bin/google-chrome || true
-          sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver || true
-      
+
+      - name: 安裝 Chrome
+        uses: browser-actions/setup-chrome@latest
+        with:
+          chrome-version: stable
+
       - name: 驗證 Chrome 安裝
         run: |
           echo "=== 檢查 Chrome 版本 ==="
-          chromium-browser --version || echo "chromium-browser 失敗"
-          google-chrome --version || echo "google-chrome 失敗"
-          
-          echo "=== 檢查 ChromeDriver 版本 ==="
-          chromedriver --version || echo "chromedriver 失敗"
-      
+          google-chrome --version
+          echo "=== 檢查 ChromeDriver ==="
+          chromedriver --version || echo "ChromeDriver 由 webdriver-manager 管理"
+
       - name: 安裝 Python 依賴
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: 執行簽到
         env:
           BAHAMUT_USERNAME: ${{ secrets.BAHAMUT_USERNAME }}
@@ -57,10 +42,10 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
         run: python bahamut_signin.py
-      
+
       - name: 工作流程完成
         if: always()
         run: echo "簽到工作流程已完成"
