@@ -18,16 +18,37 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: 安裝 Python 依賴
-        run: |
-          pip install -r requirements.txt
-      
-      - name: 安裝 Chrome 和 ChromeDriver
+      - name: 安裝系統依賴和 Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium-browser chromium-chromedriver
-          sudo ln -s /usr/lib/chromium-browser/chromium /usr/bin/google-chrome || true
-          sudo ln -s /usr/bin/chromedriver /usr/local/bin/chromedriver || true
+          sudo apt-get install -y \
+            chromium-browser \
+            chromium-chromedriver \
+            libxss1 \
+            libappindicator1 \
+            libindicator7 \
+            fonts-liberation \
+            libgbm1 \
+            libgconf-2-4 \
+            libnss3 \
+            xdg-utils
+          
+          sudo ln -sf /usr/bin/chromium-browser /usr/bin/google-chrome || true
+          sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver || true
+      
+      - name: 驗證 Chrome 安裝
+        run: |
+          echo "=== 檢查 Chrome 版本 ==="
+          chromium-browser --version || echo "chromium-browser 失敗"
+          google-chrome --version || echo "google-chrome 失敗"
+          
+          echo "=== 檢查 ChromeDriver 版本 ==="
+          chromedriver --version || echo "chromedriver 失敗"
+      
+      - name: 安裝 Python 依賴
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
       
       - name: 執行簽到
         env:
