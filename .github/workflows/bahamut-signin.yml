@@ -2,9 +2,8 @@ name: Bahamut 自動簽到
 
 on:
   schedule:
-    # 每天凌晨 12:05 台灣時間 (UTC+8 = UTC 20:05 前一天)
     - cron: '5 20 * * *'
-  workflow_dispatch:  # 允許手動觸發
+  workflow_dispatch:
 
 jobs:
   signin:
@@ -19,14 +18,16 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: 安裝系統依賴
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser chromium-chromedriver
-      
       - name: 安裝 Python 依賴
         run: |
           pip install -r requirements.txt
+      
+      - name: 安裝 Chrome 和 ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+          sudo ln -s /usr/lib/chromium-browser/chromium /usr/bin/google-chrome || true
+          sudo ln -s /usr/bin/chromedriver /usr/local/bin/chromedriver || true
       
       - name: 執行簽到
         env:
