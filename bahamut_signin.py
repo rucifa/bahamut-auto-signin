@@ -10,6 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 def send_email(subject, body, is_success=True):
     """發送郵件通知"""
@@ -91,14 +92,22 @@ def signin_bahamut():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--start-maximized")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
     
     driver = None
     try:
-        # 初始化瀏覽器
-        print("🔄 正在初始化瀏覽器...")
-        driver = webdriver.Chrome(options=chrome_options)
+        # 初始化瀏覽器 - 使用 webdriver-manager
+        print("🔄 正在初始化 Chrome 瀏覽器...")
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        except:
+            # 備用方案：直接使用系統 Chrome
+            print("📌 使用備用 Chrome 配置...")
+            driver = webdriver.Chrome(options=chrome_options)
         
         # 打開巴哈姆特首頁
         print("🔄 正在打開巴哈姆特...")
