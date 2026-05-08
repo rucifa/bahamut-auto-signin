@@ -12,12 +12,13 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException
 
 
 def send_email(subject, body, is_success=True):
     """發送郵件通知"""
-    smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-    smtp_port = int(os.getenv('SMTP_PORT', '587'))
+    smtp_server = os.getenv('SMTP_SERVER') or 'smtp.gmail.com'
+    smtp_port = int(os.getenv('SMTP_PORT') or '587')
     sender_email = os.getenv('SENDER_EMAIL')
     sender_password = os.getenv('SENDER_PASSWORD')
     recipient_email = os.getenv('RECIPIENT_EMAIL')
@@ -70,7 +71,7 @@ def send_email(subject, body, is_success=True):
 def create_driver():
     """建立 Chrome WebDriver"""
     options = Options()
-    options.add_argument('--headless')
+    options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
@@ -78,11 +79,8 @@ def create_driver():
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                         'AppleWebKit/537.36 (KHTML, like Gecko) '
-                         'Chrome/120.0.0.0 Safari/537.36')
+    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36')
 
-    # 優先使用 webdriver-manager 自動管理版本
     try:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
@@ -91,7 +89,6 @@ def create_driver():
     except Exception as e:
         print(f"⚠️ webdriver-manager 失敗: {e}，嘗試系統 ChromeDriver...")
 
-    # 備用：使用系統安裝的 chromedriver
     try:
         driver = webdriver.Chrome(options=options)
         print("✅ WebDriver 啟動成功 (系統 chromedriver)")
@@ -112,66 +109,52 @@ def signin_bahamut():
     wait = WebDriverWait(driver, 20)
 
     try:
-        # 前往登入頁面
-        print("🌐 前往巴哈姆特登入頁面...")
-        driver.get('https://www.gamer.com.tw/')
-        time.sleep(2)
+        print("🌐 直接前往巴哈姆特登入頁...")
+        driver.get('https://user.gamer.com.tw/login.php')
+        time.sleep(3)
 
-        # 點擊登入按鈕
-        print("🔍 尋找登入入口...")
-        login_link = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'a[href*="login"], a.signin, #sign-in-btn'))
-        )
-        login_link.click()
-        time.sleep(2)
-
-        # 填入帳號密碼
         print("✏️ 填入帳號密碼...")
         username_field = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="userid"], #userid, input[type="text"]'))
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="userid"], #userid'))
         )
         username_field.clear()
         username_field.send_keys(username)
 
-        password_field = driver.find_element(By.CSS_SELECTOR, 'input[name="password"], #password, input[type="password"]')
+        password_field = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="password"], #password'))
+        )
         password_field.clear()
         password_field.send_keys(password)
 
-        # 提交登入
         print("🔐 提交登入...")
-        submit_btn = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"], .login-btn')
+        submit_btn = wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]'))
+        )
         submit_btn.click()
-        time.sleep(3)
+        time.sleep(5)
 
-        # 確認登入狀態
-        current_url = driver.current_url
-        page_source = driver.page_source
+        page_source = driver.page_source.lower()
+        current_url = driver.current_url.lower()
 
-        if 'logout' in page_source.lower() or username.lower() in page_source.lower():
-            print("✅ 登入成功！")
-        else:
-            raise RuntimeError("登入後無法確認登入狀態，請檢查帳號密碼")
+        if 'login.php' in current_url:
+            raise RuntimeError("登入後仍停留在登入頁，可能帳密錯誤、需要驗證碼，或登入流程已變更")
 
-        # 前往簽到頁面
+        print("✅ 已送出登入流程")
+
         print("🎯 前往簽到頁面...")
         driver.get('https://www.gamer.com.tw/ajax/signin.php')
-        time.sleep(2)
+        time.sleep(3)
 
         signin_result = driver.page_source
-        print(f"簽到回應: {signin_result[:200]}")
+        print(f"簽到回應: {signin_result[:500]}")
 
-        # 嘗試點擊簽到按鈕（若為頁面形式）
-        try:
-            signin_btn = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, '.signin-btn, #signin-btn, button.gg-btn'))
-            )
-            signin_btn.click()
-            time.sleep(2)
-            print("✅ 簽到按鈕點擊成功")
-        except Exception:
-            print("ℹ️ 未找到簽到按鈕，可能已透過 AJAX 完成或今日已簽到")
+        if any(keyword in signin_result for keyword in ['成功', '簽到', '獲得', '巴幣', 'GP']):
+            return "登入並簽到成功！"
 
-        return "登入並簽到成功！"
+        return f"已完成登入並請求簽到，回應內容：{signin_result[:200]}"
+
+    except TimeoutException as e:
+        raise RuntimeError(f"頁面元素等待逾時，可能是巴哈登入頁結構已變更: {e}")
 
     finally:
         driver.quit()
