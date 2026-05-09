@@ -32,7 +32,9 @@ def get_log_url() -> str:
     return "https://github.com/你的帳號/你的Repo/actions"
 
 
-def get_cookie_expiry() -> tuple:
+def parse_baharune_jwt() -> dict:
+    """從 BAHARUNE JWT 解析帳號資訊，回傳 username / userid / exp 等"""
+    result = {"username": "未知", "userid": "未知", "exp_date": "未知", "days_left": -1}
     try:
         for item in COOKIE.split(";"):
             item = item.strip()
@@ -41,14 +43,30 @@ def get_cookie_expiry() -> tuple:
                 payload_b64 = jwt.split(".")[1]
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
+
+                result["username"] = payload.get("username", "未知")
+                result["userid"] = payload.get("userid", payload.get("uid", "未知"))
+
                 exp_timestamp = payload.get("exp", 0)
-                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc).astimezone()
+                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
                 now = datetime.now(tz=timezone.utc)
-                days_left = (datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) - now).days
-                return exp_dt.strftime("%Y-%m-%d"), days_left
+                result["exp_date"] = (exp_dt.astimezone()).strftime("%Y-%m-%d")
+                result["days_left"] = (exp_dt - now).days
+                break
     except Exception as e:
         print(f"解析 JWT 失敗：{e}")
-    return "未知", -1
+    return result
+
+
+def validate_cookie() -> list:
+    """檢查必要欄位是否存在，回傳缺少的欄位清單"""
+    required = ["BAHARUNE", "ckBahamutCsrfToken"]
+    missing = []
+    cookie_keys = [item.strip().split("=")[0] for item in COOKIE.split(";")]
+    for key in required:
+        if key not in cookie_keys:
+            missing.append(key)
+    return missing
 
 
 def get_csrf_token() -> str:
@@ -100,7 +118,8 @@ def do_signin() -> dict:
 
 def do_anime_answer() -> str:
     try:
-        url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
+        # ★ 使用新端點
+        url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
         headers = build_headers("https://ani.gamer.com.tw/")
 
         resp = requests.get(url, headers=headers, timeout=15)
@@ -118,6 +137,7 @@ def do_anime_answer() -> str:
                 print("今日動畫瘋無題目")
                 return "今日無題目"
 
+        # 從 blackxblue 取得答案
         list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
         r1 = requests.get(list_url, headers=build_headers("https://home.gamer.com.tw/"), timeout=15)
         r1.raise_for_status()
@@ -163,8 +183,22 @@ def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
-    exp_date, days_left = get_cookie_expiry()
+    # ── 解析帳號資訊 ──
+    jwt_info = parse_baharune_jwt()
+    username = jwt_info["username"]
+    userid = jwt_info["userid"]
+    exp_date = jwt_info["exp_date"]
+    days_left = jwt_info["days_left"]
+    print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
+
+    # ── 驗證 Cookie 必要欄位 ──
+    missing = validate_cookie()
+    if missing:
+        warn_msg = f"⚠️ Cookie 缺少必要欄位：{', '.join(missing)}，請重新設定 GitHub Secrets！"
+        print(warn_msg)
+        send_email("⚠️ 巴哈 Cookie 格式異常", warn_msg)
+        raise Exception(warn_msg)
 
     if days_left < 0:
         expiry_warning = "\n\n⚠️ Cookie 已過期（" + exp_date + "），請立即更新！"
@@ -191,7 +225,6 @@ def main():
             print("今日已簽到，略過簽到步驟")
             signin_result = "✅ 今日已簽到"
         else:
-            # ── 執行簽到 ──
             print("正在執行簽到...")
             do_signin()
             status_data2 = get_signin_status()
@@ -212,6 +245,7 @@ def main():
     # ── 發送 Email 通知 ──
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
+        f"帳號：{username}（ID：{userid}）\n"
         f"執行時間：{now}\n"
         f"每日簽到：{signin_result}\n"
         + (f"{streak_info}\n" if streak_info else "")
