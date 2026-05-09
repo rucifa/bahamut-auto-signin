@@ -6,7 +6,6 @@ import base64
 import re
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
-from playwright.sync_api import sync_playwright
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -33,8 +32,7 @@ def get_log_url() -> str:
     return "https://github.com/rucifa/bahamut-auto-signin/actions"
 
 
-def parse_baharune_jwt() -> dict:
-    result = {"username": "未知", "userid": "未知", "exp_date": "未知", "days_left": -1}
+def get_cookie_expiry() -> tuple:
     try:
         for item in COOKIE.split(";"):
             item = item.strip()
@@ -43,27 +41,14 @@ def parse_baharune_jwt() -> dict:
                 payload_b64 = jwt.split(".")[1]
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
-                result["username"] = payload.get("username", "未知")
-                result["userid"] = payload.get("userid", payload.get("uid", "未知"))
                 exp_timestamp = payload.get("exp", 0)
-                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc).astimezone()
                 now = datetime.now(tz=timezone.utc)
-                result["exp_date"] = (exp_dt.astimezone()).strftime("%Y-%m-%d")
-                result["days_left"] = (exp_dt - now).days
-                break
+                days_left = (datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) - now).days
+                return exp_dt.strftime("%Y-%m-%d"), days_left
     except Exception as e:
-        print(f"[ERROR] 解析 JWT 失敗：{e}")
-    return result
-
-
-def validate_cookie() -> list:
-    required = ["BAHARUNE", "ckBahamutCsrfToken"]
-    missing = []
-    cookie_keys = [item.strip().split("=")[0] for item in COOKIE.split(";")]
-    for key in required:
-        if key not in cookie_keys:
-            missing.append(key)
-    return missing
+        print(f"解析 JWT 失敗：{e}")
+    return "未知", -1
 
 
 def get_csrf_token() -> str:
@@ -80,7 +65,6 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
         "Cookie": COOKIE,
         "Referer": referer,
         "Origin": "https://www.gamer.com.tw",
-        "Content-Type": "application/x-www-form-urlencoded",
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
@@ -113,194 +97,95 @@ def do_signin() -> dict:
     return result.get("data", result)
 
 
-def cookie_str_to_list(cookie_str: str) -> list:
-    cookies = []
-    for item in cookie_str.split(";"):
-        item = item.strip()
-        if "=" in item:
-            name, value = item.split("=", 1)
-            for domain in [".gamer.com.tw", ".ani.gamer.com.tw"]:
-                cookies.append({
-                    "name": name.strip(),
-                    "value": value.strip(),
-                    "domain": domain,
-                    "path": "/",
-                })
-    return cookies
+def fetch_answer_from_blackxblue() -> str:
+    list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
+    headers = build_headers("https://home.gamer.com.tw/")
+
+    resp = requests.get(list_url, headers=headers, timeout=15)
+    resp.raise_for_status()
+
+    data = resp.json()
+    articles = data.get("data", [])
+    if not articles:
+        raise Exception("blackXblue 小屋沒有找到文章列表")
+
+    latest_sn = articles[0].get("sn", "")
+    if not latest_sn:
+        raise Exception("無法取得最新文章 sn")
+
+    print(f"最新文章 sn：{latest_sn}")
+
+    article_url = f"https://home.gamer.com.tw/creationDetail.php?sn={latest_sn}"
+    resp2 = requests.get(article_url, headers=headers, timeout=15)
+    resp2.raise_for_status()
+
+    content = resp2.text
+
+    patterns = [
+        r'答案[：:是為]\s*([ABCD])',
+        r'[Aa]nswer[：:\s]+([ABCD])',
+        r'正確答案[：:]\s*([ABCD])',
+        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, content)
+        if match:
+            answer = match.group(1).upper()
+            print(f"解析到答案：{answer}")
+            return answer
+
+    raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
 
 
-def wait_for_cloudflare(page, timeout_ms: int = 20000):
-    print("[PLAYWRIGHT] 等待 Cloudflare JS Challenge 完成...")
+def get_anime_question() -> dict:
+    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
+    headers = build_headers("https://ani.gamer.com.tw/")
+    headers["Origin"] = "https://ani.gamer.com.tw"
+    resp = requests.get(url, headers=headers, timeout=15)
+    print(f"[DEBUG] 查詢答題狀態 HTTP {resp.status_code}")
+    resp.raise_for_status()
+    data = resp.json()
+    print(f"[DEBUG] 答題狀態：{json.dumps(data, ensure_ascii=False)}")
+    return data
+
+
+def submit_anime_answer(answer: str) -> dict:
+    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
+    headers = build_headers("https://ani.gamer.com.tw/")
+    headers["Origin"] = "https://ani.gamer.com.tw"
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    resp = requests.post(url, headers=headers, data=f"answer={answer}", timeout=15)
+    print(f"[DEBUG] 提交答案 HTTP {resp.status_code}, body={resp.text[:200]}")
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict):
+        print(f"答題回應：{data.get('status', '未知')} / {data.get('message', '無')}")
+    return data
+
+
+def do_anime_answer() -> str:
     try:
-        page.wait_for_function(
-            "() => document.title !== '請稍候...' && document.title !== 'Just a moment...'",
-            timeout=timeout_ms
-        )
-        print(f"[PLAYWRIGHT] Cloudflare 通過，當前標題：{page.title()}")
-    except Exception:
-        print(f"[PLAYWRIGHT] 等待超時，當前標題：{page.title()}")
+        question_data = get_anime_question()
 
+        status = question_data.get("status", 0)
+        if status == 0:
+            msg = question_data.get("message", "")
+            if "已作答" in msg or "already" in msg.lower():
+                print("今日動畫瘋已答題，略過")
+                return "今日已答題（略過）"
+            if "沒有" in msg or "無題" in msg:
+                print("今日動畫瘋無題目")
+                return "今日無題目"
 
-def do_anime_answer_playwright() -> str:
-    print("[PLAYWRIGHT] 開始初始化瀏覽器...")
-
-    try:
-        with sync_playwright() as p:
-            print("[PLAYWRIGHT] 啟動 Chromium...")
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                ]
-            )
-
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                locale="zh-TW",
-                timezone_id="Asia/Taipei",
-                viewport={"width": 1280, "height": 800},
-                java_script_enabled=True,
-            )
-
-            all_cookies = cookie_str_to_list(COOKIE)
-            context.add_cookies(all_cookies)
-            print(f"[PLAYWRIGHT] 注入 {len(all_cookies)} 個 Cookie")
-
-            page = context.new_page()
-
-            # 手動隱藏自動化特徵
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-                Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en'] });
-                window.chrome = { runtime: {} };
-            """)
-            print("[PLAYWRIGHT] Stealth 手動注入完成")
-
-            # ── 步驟一：導向 blackxblue 創作列表，抓最新文章 sn ──
-            print("[PLAYWRIGHT] 導向 blackxblue 創作列表...")
-            page.goto("https://home.gamer.com.tw/creation.php?owner=blackxblue", timeout=20000)
-            page.wait_for_timeout(2000)
-
-            content_html = page.content()
-            sn_list = re.findall(r'artwork\.php\?sn=(\d+)', content_html)
-            sn_list = list(dict.fromkeys(sn_list))
-            print(f"[PLAYWRIGHT] 找到文章 sn 列表（前5）：{sn_list[:5]}")
-
-            sn = sn_list[0] if sn_list else None
-            if not sn:
-                browser.close()
-                return "⏭️ 跳過（無法從創作列表取得文章 sn）"
-
-            # ── 步驟二：導向文章頁面，解析答案 ──
-            print(f"[PLAYWRIGHT] 取得文章內容 sn={sn}...")
-            page.goto(f"https://home.gamer.com.tw/artwork.php?sn={sn}", timeout=15000)
-            page.wait_for_timeout(1500)
-            content = page.content()
-
-            title_match = re.search(r'<title>(.*?)</title>', content)
-            print(f"[PLAYWRIGHT] 文章標題：{title_match.group(1) if title_match else '未知'}")
-
-            answer = None
-            for pattern in [
-                r'A[:：]([1-4ABCD])',
-                r'答案[：:是為]\s*([1-4ABCD])',
-                r'正確答案[：:]\s*([1-4ABCD])',
-                r'[Aa]nswer[：:\s]+([1-4ABCD])',
-            ]:
-                m = re.search(pattern, content)
-                if m:
-                    val = m.group(1).upper()
-                    answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
-                    break
-
-            if not answer:
-                print(f"[PLAYWRIGHT] 文章內容前 1000 字：{content[:1000]}")
-                browser.close()
-                return "⏭️ 跳過（無法從文章解析答案）"
-
-            print(f"[PLAYWRIGHT] 解析到答案：{answer}")
-
-            # ── 步驟三：導向動畫瘋首頁，等待 Cloudflare 通過 ──
-            print("[PLAYWRIGHT] 導向到動畫瘋首頁...")
-            page.goto("https://ani.gamer.com.tw/", timeout=30000)
-            wait_for_cloudflare(page, timeout_ms=20000)
-            page.wait_for_timeout(2000)
-            print(f"[PLAYWRIGHT] 最終標題：{page.title()}")
-            print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
-
-            if "請稍候" in page.title() or "Just a moment" in page.title():
-                browser.close()
-                return "⏭️ 跳過（Cloudflare JS Challenge 未通過）"
-
-            # ── 步驟四：同源查詢今日答題狀態 ──
-            print("[PLAYWRIGHT] 查詢答題狀態...")
-            status_result = page.evaluate("""
-                async () => {
-                    const resp = await fetch('/ajax/questionnaire.php', {
-                        method: 'GET',
-                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                    });
-                    return { status: resp.status, body: await resp.text() };
-                }
-            """)
-            print(f"[PLAYWRIGHT] 查詢狀態：HTTP {status_result['status']}, body={status_result['body'][:200]}")
-
-            if status_result['status'] == 200:
-                try:
-                    status_data = json.loads(status_result['body'])
-                    if status_data.get("status") == 0:
-                        msg = status_data.get("message", "")
-                        if "已作答" in msg or "already" in msg.lower():
-                            browser.close()
-                            return "今日已答題（略過）"
-                        if "沒有" in msg or "無題" in msg:
-                            browser.close()
-                            return "今日無題目"
-                except Exception:
-                    pass
-            elif status_result['status'] == 403:
-                browser.close()
-                return "⏭️ 跳過（Cloudflare 仍然攔截）"
-
-            # ── 步驟五：同源提交答案 ──
-            print(f"[PLAYWRIGHT] 提交答案：{answer}")
-            result = page.evaluate(f"""
-                async () => {{
-                    const resp = await fetch('/ajax/questionnaire.php', {{
-                        method: 'POST',
-                        headers: {{
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-Requested-With': 'XMLHttpRequest',
-                        }},
-                        body: 'answer={answer}',
-                    }});
-                    return {{ status: resp.status, body: await resp.text() }};
-                }}
-            """)
-
-            print(f"[PLAYWRIGHT] 答題回應：HTTP {result['status']}, body={result['body'][:200]}")
-            browser.close()
-
-            if result['status'] == 200:
-                try:
-                    data = json.loads(result['body'])
-                    msg = data.get("message", "無回應訊息")
-                    return f"✅ 答題完成（答案：{answer}），回應：{msg}"
-                except Exception:
-                    return f"✅ 答題完成（答案：{answer}）"
-            elif result['status'] == 403:
-                return "⏭️ 跳過（Cloudflare 仍然攔截）"
-            else:
-                return f"⏭️ 跳過（HTTP {result['status']}）"
+        answer = fetch_answer_from_blackxblue()
+        result = submit_anime_answer(answer)
+        result_msg = result.get("message", "無回應訊息") if isinstance(result, dict) else str(result)
+        return f"✅ 答題完成（答案：{answer}），回應：{result_msg}"
 
     except Exception as e:
-        print(f"[ERROR] Playwright 執行失敗：{e}")
-        import traceback
-        traceback.print_exc()
-        return f"⏭️ 跳過（Playwright 錯誤：{e}）"
+        print(f"動畫瘋答題失敗：{e}")
+        return f"❌ 答題失敗：{e}"
 
 
 # ────────────────────────────────────────────
@@ -309,21 +194,8 @@ def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
-    jwt_info = parse_baharune_jwt()
-    username = jwt_info["username"]
-    userid = jwt_info["userid"]
-    exp_date = jwt_info["exp_date"]
-    days_left = jwt_info["days_left"]
-    print(f"帳號：{username}（ID：{userid}）")
+    exp_date, days_left = get_cookie_expiry()
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
-
-    missing = validate_cookie()
-    if missing:
-        warn_msg = f"⚠️ Cookie 缺少必要欄位：{', '.join(missing)}，請重新設定 GitHub Secrets！"
-        print(f"[ERROR] {warn_msg}")
-        send_email("⚠️ 巴哈 Cookie 格式異常", warn_msg)
-        raise Exception(warn_msg)
-    print(f"[DEBUG] Cookie 欄位驗證通過，CSRF Token：{get_csrf_token()[:8]}...")
 
     if days_left < 0:
         expiry_warning = "\n\n⚠️ Cookie 已過期（" + exp_date + "），請立即更新！"
@@ -337,6 +209,7 @@ def main():
     answer_result = "未執行"
     has_error = False
 
+    # ── 簽到 ──
     try:
         print("\n========== 簽到 ==========")
         status_data = get_signin_status()
@@ -362,14 +235,16 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
+    # ── 動畫瘋答題 ──
     print("\n========== 動畫瘋答題 ==========")
-    answer_result = do_anime_answer_playwright()
+    answer_result = do_anime_answer()
     print(f"答題結果：{answer_result}")
 
+    # ── 發送 Email 通知 ──
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
-        f"帳號：{username}（ID：{userid}）\n"
+        f"Cookie 到期日：{exp_date}（剩餘 {days_left} 天）\n"
         f"執行時間：{now}\n"
         f"每日簽到：{signin_result}\n"
         + (f"{streak_info}\n" if streak_info else "")
