@@ -30,7 +30,7 @@ def get_log_url() -> str:
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if repo and run_id:
         return f"https://github.com/{repo}/actions/runs/{run_id}"
-    return "https://github.com/你的帳號/你的Repo/actions"
+    return "https://github.com/rucifa/bahamut-auto-signin/actions"
 
 
 def parse_baharune_jwt() -> dict:
@@ -152,28 +152,21 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
-            # ── 步驟一：先導向到 home.gamer.com.tw，才能同源呼叫 AJAX ──
-            print("[PLAYWRIGHT] 導向到 home.gamer.com.tw...")
-            page.goto("https://home.gamer.com.tw/", timeout=30000)
-            page.wait_for_timeout(1500)
-            print(f"[PLAYWRIGHT] 標題：{page.title()}")
-
-            # ── 步驟二：同源取得 blackxblue 文章列表 ──
+            # ── 步驟一：直接用 page.goto 取得文章列表 JSON ──
             print("[PLAYWRIGHT] 取得 blackxblue 最新文章...")
-            article_result = page.evaluate("""
-                async () => {
-                    const resp = await fetch('/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1', {
-                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                    });
-                    return { status: resp.status, body: await resp.text() };
-                }
-            """)
-            print(f"[PLAYWRIGHT] 文章列表：HTTP {article_result['status']}, body={article_result['body'][:300]}")
+            page.goto(
+                "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1",
+                timeout=15000
+            )
+            page.wait_for_timeout(1000)
+            raw = page.content()
+            print(f"[PLAYWRIGHT] 文章列表前 300 字：{raw[:300]}")
 
             sn = None
-            if article_result['status'] == 200:
+            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if json_match:
                 try:
-                    data = json.loads(article_result['body'])
+                    data = json.loads(json_match.group())
                     articles = data.get("data", [])
                     if articles:
                         sn = articles[0].get("sn", "")
@@ -185,19 +178,19 @@ def do_anime_answer_playwright() -> str:
                 browser.close()
                 return "⏭️ 跳過（無法取得 blackxblue 文章列表）"
 
-            # ── 步驟三：同源取得文章內容，解析答案 ──
+            # ── 步驟二：直接導向文章頁面取得內容，解析答案 ──
             print(f"[PLAYWRIGHT] 取得文章內容 sn={sn}...")
-            article_content_result = page.evaluate(f"""
-                async () => {{
-                    const resp = await fetch('/artwork.php?sn={sn}');
-                    return {{ status: resp.status, body: await resp.text() }};
-                }}
-            """)
-            print(f"[PLAYWRIGHT] 文章內容：HTTP {article_content_result['status']}, 長度={len(article_content_result['body'])}")
+            page.goto(f"https://home.gamer.com.tw/artwork.php?sn={sn}", timeout=15000)
+            page.wait_for_timeout(1000)
+            content = page.content()
+            print(f"[PLAYWRIGHT] 文章內容長度：{len(content)}")
 
-            content = article_content_result['body']
             answer = None
-            for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'[Aa]nswer[：:\s]+([ABCD])']:
+            for pattern in [
+                r'答案[：:是為]\s*([ABCD])',
+                r'正確答案[：:]\s*([ABCD])',
+                r'[Aa]nswer[：:\s]+([ABCD])',
+            ]:
                 m = re.search(pattern, content)
                 if m:
                     answer = m.group(1).upper()
@@ -210,14 +203,14 @@ def do_anime_answer_playwright() -> str:
 
             print(f"[PLAYWRIGHT] 解析到答案：{answer}")
 
-            # ── 步驟四：導向到動畫瘋首頁，讓 Cloudflare 驗證通過 ──
+            # ── 步驟三：導向到動畫瘋首頁，讓 Cloudflare 驗證通過 ──
             print("[PLAYWRIGHT] 導向到動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
             page.wait_for_timeout(2000)
             print(f"[PLAYWRIGHT] 動畫瘋標題：{page.title()}")
             print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
 
-            # ── 步驟五：同源查詢今日答題狀態 ──
+            # ── 步驟四：同源查詢今日答題狀態 ──
             print("[PLAYWRIGHT] 查詢答題狀態...")
             status_result = page.evaluate("""
                 async () => {
@@ -244,7 +237,7 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     pass
 
-            # ── 步驟六：同源提交答案 ──
+            # ── 步驟五：同源提交答案 ──
             print(f"[PLAYWRIGHT] 提交答案：{answer}")
             result = page.evaluate(f"""
                 async () => {{
