@@ -12,6 +12,7 @@ EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 EMAIL_TO = os.environ["EMAIL_TO"]
 
+
 def send_email(subject: str, body: str):
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
@@ -22,12 +23,14 @@ def send_email(subject: str, body: str):
         smtp.send_message(msg)
     print(f"Email 已發送：{subject}")
 
+
 def get_log_url() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if repo and run_id:
         return f"https://github.com/{repo}/actions/runs/{run_id}"
     return "https://github.com/你的帳號/你的Repo/actions"
+
 
 def get_cookie_expiry() -> tuple:
     try:
@@ -47,12 +50,14 @@ def get_cookie_expiry() -> tuple:
         print(f"解析 JWT 失敗：{e}")
     return "未知", -1
 
+
 def get_csrf_token() -> str:
     for item in COOKIE.split(";"):
         item = item.strip()
         if item.startswith("ckBahamutCsrfToken="):
             return item.split("=", 1)[1]
     return ""
+
 
 def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
     return {
@@ -63,8 +68,9 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
-        "X-CSRF-Token": get_csrf_token()
+        "X-CSRF-Token": get_csrf_token(),
     }
+
 
 def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
     if method == "GET":
@@ -80,48 +86,38 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
 
     text = resp.text.strip()
 
-    if text.lower().startswith("<!doctype") or "找不到網頁" in text:
-        return False, "回傳 HTML 錯誤頁（端點不存在）"
+    if text.lower().startswith("<!"):
+        return False, "回應為 HTML（可能未登入）"
 
     try:
-        data = resp.json()
-        if isinstance(data, dict):
-            print(f"JSON 回應狀態：{data.get('status', '未知')} / 訊息：{data.get('message', '無')}")
-        else:
-            print("回應非 JSON 物件")
+        data = json.loads(text)
+        print(f"[DEBUG] 簽到回應 JSON：{json.dumps(data, ensure_ascii=False)}")
         return True, data
     except Exception:
-        print(f"純文字回應：{text[:100]}")
+        print(f"[DEBUG] 簽到回應（非 JSON）：{text[:300]}")
         return True, text
+
 
 def do_signin():
     csrf_token = get_csrf_token()
-    headers = build_headers()
+    headers = build_headers("https://home.gamer.com.tw/")
 
     endpoints = [
-        ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
-        ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
-        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
-        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
-        ("GET",  "https://api.gamer.com.tw/bahamut/v1/signin.php"),
+        ("POST", "https://home.gamer.com.tw/ajax/signin.php"),
+        ("GET",  "https://home.gamer.com.tw/ajax/signin.php"),
+        ("POST", "https://www.gamer.com.tw/ajax/signin.php"),
     ]
 
     for method, url in endpoints:
         try:
             success, result = try_endpoint(method, url, headers, csrf_token)
             if success:
-                print(f"簽到成功，端點：[{method}] {url}")
-                return
+                return result
         except Exception as e:
-            print(f"端點例外：{e}")
-            continue
+            print(f"端點 {url} 失敗：{e}")
 
-    raise Exception("所有端點均失敗，請重新從瀏覽器取得 Cookie 更新 GitHub Secret")
+    raise Exception("所有簽到端點均失敗")
 
-# ────────────────────────────────────────────
-# 動畫瘋答題功能
-# 答案來源：blackXblue 小屋（社群每日更新）
-# ────────────────────────────────────────────
 
 def fetch_answer_from_blackxblue() -> str:
     list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
@@ -153,6 +149,7 @@ def fetch_answer_from_blackxblue() -> str:
         r'正確答案[：:]\s*([ABCD])',
         r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
     ]
+
     for pattern in patterns:
         match = re.search(pattern, content)
         if match:
@@ -162,6 +159,7 @@ def fetch_answer_from_blackxblue() -> str:
 
     raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
 
+
 def get_anime_question() -> dict:
     url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
     headers = build_headers("https://ani.gamer.com.tw/")
@@ -170,6 +168,7 @@ def get_anime_question() -> dict:
     data = resp.json()
     print(f"問題取得狀態：{data.get('status', '未知')}")
     return data
+
 
 def submit_anime_answer(answer: str) -> dict:
     url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
@@ -183,6 +182,7 @@ def submit_anime_answer(answer: str) -> dict:
     else:
         print("答題回應非 JSON")
     return data
+
 
 def do_anime_answer() -> str:
     try:
@@ -203,9 +203,13 @@ def do_anime_answer() -> str:
         result_msg = result.get("message", "無回應訊息") if isinstance(result, dict) else str(result)
         return f"答題完成（答案：{answer}），回應：{result_msg}"
 
+    except requests.exceptions.HTTPError as e:
+        print(f"動畫瘋答題 API 不可用（{e}），略過")
+        return "⏭️ 跳過（API 暫不可用）"
     except Exception as e:
         print(f"動畫瘋答題失敗：{e}")
-        return f"答題失敗：{e}"
+        return f"⏭️ 跳過（{e}）"
+
 
 # ────────────────────────────────────────────
 
@@ -256,6 +260,7 @@ def main():
 
     if has_error:
         raise Exception(f"簽到失敗：{signin_result}")
+
 
 if __name__ == "__main__":
     main()
