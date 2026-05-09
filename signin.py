@@ -65,7 +65,7 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
 
     try:
         data = resp.json()
-        print(f"JSON 回應：{data}")
+        print(f"JSON 回應狀態：{data.get('status', '未知')} / 訊息：{data.get('message', '無')}" if isinstance(data, dict) else "回應非 JSON 物件")
         return True, data
     except Exception:
         print(f"純文字回應：{text[:100]}")
