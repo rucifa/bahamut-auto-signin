@@ -73,8 +73,16 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
     try:
         data = resp.json()
         print(f"JSON 回應：{data}")
+
+        # JSON 內有 error 代表真正失敗
+        if "error" in data:
+            code = data["error"].get("status", "")
+            msg = data["error"].get("message", "未知錯誤")
+            return False, f"API 錯誤：{code} - {msg}"
+
         return True, data
     except Exception:
+        # 非 JSON 也不是 HTML 錯誤頁 → 視為成功
         print(f"純文字回應：{text[:100]}")
         return True, text
 
@@ -91,22 +99,26 @@ def do_signin():
         "X-CSRF-Token": csrf_token
     }
 
-    # 只測試 www.gamer.com.tw 的端點
     endpoints = [
         ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
         ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
     ]
 
     for method, url in endpoints:
         try:
             success, result = try_endpoint(method, url, headers, csrf_token)
             if success:
+                print(f"簽到成功，端點：{method} {url}")
                 return result
+            else:
+                print(f"端點失敗：{result}")
         except Exception as e:
             print(f"端點例外：{e}")
             continue
 
-    raise Exception("簽到失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
+    raise Exception("所有端點均失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
