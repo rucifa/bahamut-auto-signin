@@ -102,7 +102,35 @@ def do_signin() -> dict:
     return result.get("data", result)
 
 
-def fetch_answer_from_blackxblue() -> str:
+def extract_title(content: str) -> str:
+    """從 HTML 中抓出文章標題，供 debug 使用"""
+    m = re.search(r'<title>([^<]+)</title>', content)
+    return m.group(1).strip() if m else "（無法取得標題）"
+
+
+def try_parse_answer(content: str) -> str | None:
+    """對 content 套用所有 regex，成功則回傳答案字母，否則回傳 None"""
+    patterns = [
+        r'A[:：]([1-4ABCD])',
+        r'答案[：:是為]\s*([1-4ABCD])',
+        r'正確答案[：:]\s*([1-4ABCD])',
+        r'[Aa]nswer[：:\s]+([1-4ABCD])',
+        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content)
+        if match:
+            val = match.group(1).upper()
+            return ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
+    return None
+
+
+def fetch_answer_from_blackxblue() -> tuple[str, str]:
+    """
+    回傳 (answer, note)
+    answer: 答案字母 A/B/C/D
+    note:   附加說明，例如使用了寬鬆比對、命中的 sn
+    """
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -116,7 +144,7 @@ def fetch_answer_from_blackxblue() -> str:
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     delta = (today - BASE_DATE).days
     estimated_sn = BASE_SN + delta
-    print(f"[DEBUG] 今日台灣日期：{today}，估算 sn：{estimated_sn}")
+    print(f"[DEBUG] 今日台灣日期：{today}，估算 sn：{estimated_sn}（基準 {BASE_SN} + {delta} 天）")
 
     today_str_formats = [
         today.strftime("%m/%d"),
@@ -125,24 +153,21 @@ def fetch_answer_from_blackxblue() -> str:
         today.strftime("%Y-%m-%d"),
     ]
 
-    patterns = [
-        r'A[:：]([1-4ABCD])',
-        r'答案[：:是為]\s*([1-4ABCD])',
-        r'正確答案[：:]\s*([1-4ABCD])',
-        r'[Aa]nswer[：:\s]+([1-4ABCD])',
-        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
-    ]
+    tried_sns = []
 
-    # 第一輪：精確比對（今天日期 + 作者必須是 blackxblue，±7 sn 範圍）
+    # ── 第一輪：精確比對（今天日期 + blackxblue，±7 sn 範圍）──────
     for offset in range(-7, 8):
         sn = estimated_sn + offset
+        tried_sns.append(sn)
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
         print(f"[DEBUG] 嘗試 sn={sn}")
         try:
             resp = requests.get(article_url, headers=headers, timeout=15)
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] sn={sn} 請求失敗：{e}")
             continue
         if resp.status_code != 200:
+            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}，跳過")
             continue
         content = resp.text
 
@@ -153,19 +178,21 @@ def fetch_answer_from_blackxblue() -> str:
         if not is_today or not is_blackxblue:
             continue
 
-        for pattern in patterns:
-            match = re.search(pattern, content)
-            if match:
-                val = match.group(1).upper()
-                answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
-                print(f"解析到答案（精確）：{answer}，sn={sn}")
-                return answer
+        title  = extract_title(content)
+        answer = try_parse_answer(content)
+        print(f"[DEBUG] sn={sn} 文章標題：{title}")
 
-        print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案，內容前 500 字：{content[:500]}")
-        raise Exception("找到今日文章但無法解析答案，格式可能已變更")
+        if answer:
+            print(f"解析到答案（精確）：{answer}，sn={sn}")
+            return answer, f"精確比對，sn={sn}"
 
-    # 第二輪：寬鬆比對（只確認作者是 blackxblue，±5 sn 範圍）
-    print("[DEBUG] 精確比對失敗，改用寬鬆掃描（只確認作者）...")
+        # 找到文章但 regex 全不匹配
+        print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案")
+        print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
+        raise Exception(f"找到今日文章（sn={sn}，標題：{title}）但無法解析答案，格式可能已變更")
+
+    # ── 第二輪：寬鬆比對（只確認 blackxblue，±5 sn 範圍）─────────
+    print(f"[DEBUG] 精確比對失敗（嘗試過：{tried_sns}），改用寬鬆掃描...")
     for offset in range(-5, 6):
         sn = estimated_sn + offset
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
@@ -178,17 +205,19 @@ def fetch_answer_from_blackxblue() -> str:
         content = resp.text
         if "blackxblue" not in content:
             continue
-        for pattern in patterns:
-            match = re.search(pattern, content)
-            if match:
-                val = match.group(1).upper()
-                answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
-                print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
-                return answer
+
+        title  = extract_title(content)
+        answer = try_parse_answer(content)
+        print(f"[DEBUG] 寬鬆掃描 sn={sn} 標題：{title}")
+
+        if answer:
+            print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
+            return answer, f"⚠️ 寬鬆比對（日期未命中），sn={sn}，標題：{title}"
 
     raise Exception(
-        f"在 sn {estimated_sn - 7}~{estimated_sn + 7} 找不到 blackxblue 的文章，"
-        f"請手動將 BASE_DATE / BASE_SN 更新為今日正確值"
+        f"在 sn {estimated_sn - 7}~{estimated_sn + 7} 找不到 blackxblue 的文章\n"
+        f"嘗試過的 sn：{tried_sns}\n"
+        f"請手動將 BASE_DATE={today} / BASE_SN=??? 更新為今日正確值"
     )
 
 
@@ -242,15 +271,15 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題：抓答案，通知手動作答 ─────────────────────────
+    # ── 動畫瘋答題 ────────────────────────────────────────────────
     print("\n========== 動畫瘋答題 ==========")
     try:
-        answer = fetch_answer_from_blackxblue()
+        answer, note = fetch_answer_from_blackxblue()
         answer_result = (
-            f"📋 今日答案：{answer}（請手動前往動畫瘋作答）\n"
-            f"https://ani.gamer.com.tw/"
+            f"📋 今日答案：{answer}（{note}）\n"
+            f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
         )
-        print(f"今日答案：{answer}")
+        print(f"今日答案：{answer}（{note}）")
     except Exception as e:
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
