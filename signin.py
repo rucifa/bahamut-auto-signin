@@ -113,51 +113,6 @@ def do_signin() -> dict:
     return result.get("data", result)
 
 
-def fetch_answer_from_blackxblue() -> str:
-    list_url = "https://home.gamer.com.tw/creationCategory.php?owner=blackxblue&c=370818"
-    print(f"[DEBUG] 抓取 blackxblue 文章列表（HTML 版）...")
-    r1 = requests.get(list_url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://home.gamer.com.tw/",
-        "Accept-Language": "zh-TW,zh;q=0.9",
-    }, timeout=15)
-    print(f"[DEBUG] 文章列表 HTTP {r1.status_code}")
-    print(f"[DEBUG] 文章列表回應前 200 字：{r1.text[:200]}")
-    r1.raise_for_status()
-
-    sn_match = re.search(r'artwork\.php\?sn=(\d+)', r1.text)
-    if not sn_match:
-        raise Exception("無法從 creationCategory 頁面找到文章 sn")
-    latest_sn = sn_match.group(1)
-    print(f"[DEBUG] 最新文章 sn：{latest_sn}")
-
-    r2 = requests.get(
-        f"https://home.gamer.com.tw/artwork.php?sn={latest_sn}",
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://home.gamer.com.tw/",
-            "Accept-Language": "zh-TW,zh;q=0.9",
-        }, timeout=15
-    )
-    print(f"[DEBUG] 文章內容 HTTP {r2.status_code}")
-    r2.raise_for_status()
-    content = r2.text
-
-    answer = None
-    for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'\bA[：:]\s*([ABCD1-4])\b', r'[Aa]nswer[：:\s]+([ABCD])']:
-        m = re.search(pattern, content)
-        if m:
-            answer = m.group(1).upper()
-            break
-
-    if not answer:
-        print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
-        raise Exception("無法從 blackXblue 文章解析答案，格式可能已變更")
-
-    print(f"[DEBUG] 解析到答案：{answer}")
-    return answer
-
-
 def cookie_str_to_list(cookie_str: str) -> list:
     cookies = []
     for item in cookie_str.split(";"):
@@ -176,12 +131,6 @@ def cookie_str_to_list(cookie_str: str) -> list:
 
 def do_anime_answer_playwright() -> str:
     print("[PLAYWRIGHT] 開始初始化瀏覽器...")
-
-    try:
-        answer = fetch_answer_from_blackxblue()
-    except Exception as e:
-        print(f"[ERROR] 無法取得答案：{e}")
-        return f"⏭️ 跳過（無法取得答案：{e}）"
 
     try:
         with sync_playwright() as p:
@@ -203,12 +152,71 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
+            # ── 步驟一：從 blackxblue 用 AJAX API 取得最新文章 sn（帶 Cookie）──
+            print("[PLAYWRIGHT] 取得 blackxblue 最新文章...")
+            article_result = page.evaluate("""
+                async () => {
+                    const resp = await fetch('https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1', {
+                        headers: {
+                            'Referer': 'https://home.gamer.com.tw/',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        }
+                    });
+                    return { status: resp.status, body: await resp.text() };
+                }
+            """)
+            print(f"[PLAYWRIGHT] 文章列表：HTTP {article_result['status']}, body={article_result['body'][:300]}")
+
+            sn = None
+            if article_result['status'] == 200:
+                try:
+                    data = json.loads(article_result['body'])
+                    articles = data.get("data", [])
+                    if articles:
+                        sn = articles[0].get("sn", "")
+                        print(f"[PLAYWRIGHT] 最新文章 sn：{sn}")
+                except Exception as e:
+                    print(f"[PLAYWRIGHT] 解析文章列表失敗：{e}")
+
+            if not sn:
+                browser.close()
+                return "⏭️ 跳過（無法取得 blackxblue 文章列表）"
+
+            # ── 步驟二：取得文章內容，解析答案 ──
+            print(f"[PLAYWRIGHT] 取得文章內容 sn={sn}...")
+            article_content_result = page.evaluate(f"""
+                async () => {{
+                    const resp = await fetch('https://home.gamer.com.tw/artwork.php?sn={sn}', {{
+                        headers: {{ 'Referer': 'https://home.gamer.com.tw/' }}
+                    }});
+                    return {{ status: resp.status, body: await resp.text() }};
+                }}
+            """)
+            print(f"[PLAYWRIGHT] 文章內容：HTTP {article_content_result['status']}, 長度={len(article_content_result['body'])}")
+
+            content = article_content_result['body']
+            answer = None
+            for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'[Aa]nswer[：:\s]+([ABCD])']:
+                m = re.search(pattern, content)
+                if m:
+                    answer = m.group(1).upper()
+                    break
+
+            if not answer:
+                print(f"[PLAYWRIGHT] 文章內容前 800 字：{content[:800]}")
+                browser.close()
+                return "⏭️ 跳過（無法從文章解析答案，格式可能已變更）"
+
+            print(f"[PLAYWRIGHT] 解析到答案：{answer}")
+
+            # ── 步驟三：訪問動畫瘋首頁，讓 Cloudflare 驗證通過 ──
             print("[PLAYWRIGHT] 訪問動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
             page.wait_for_timeout(2000)
             print(f"[PLAYWRIGHT] 首頁標題：{page.title()}")
             print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
 
+            # ── 步驟四：查詢今日答題狀態 ──
             print("[PLAYWRIGHT] 查詢答題狀態...")
             status_result = page.evaluate("""
                 async () => {
@@ -238,6 +246,7 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     pass
 
+            # ── 步驟五：提交答案 ──
             print(f"[PLAYWRIGHT] 提交答案：{answer}")
             result = page.evaluate(f"""
                 async () => {{
@@ -267,7 +276,7 @@ def do_anime_answer_playwright() -> str:
             elif result['status'] == 403:
                 body = result['body']
                 if "系統異常" in body or "<!DOCTYPE" in body:
-                    return "⏭️ 跳過（Cloudflare 仍然攔截，即使使用瀏覽器）"
+                    return "⏭️ 跳過（Cloudflare 仍然攔截）"
                 return "⏭️ 跳過（HTTP 403）"
             else:
                 return f"⏭️ 跳過（HTTP {result['status']}）"
