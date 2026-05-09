@@ -147,23 +147,25 @@ def fetch_answer_from_blackxblue() -> str:
 
 
 def get_anime_question() -> dict:
-    url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
+    # 方向一：手機 app API 端點
+    url = "https://api.gamer.com.tw/mobile_app/anime/v2/questionnaire.php"
     headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
     resp = requests.get(url, headers=headers, timeout=15)
     print(f"[DEBUG] 查詢答題狀態 HTTP {resp.status_code}, body={resp.text[:200]}")
-    if resp.status_code == 403:
-        return {"status": 0, "message": "Cloudflare 擋住，無法查詢"}
+    if resp.status_code in (403, 404):
+        return {"status": 0, "message": f"API 不通 (HTTP {resp.status_code})"}
     resp.raise_for_status()
     return resp.json()
 
 
 def submit_anime_answer(answer: str) -> dict:
-    url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
+    # 方向一：手機 app API 端點
+    url = "https://api.gamer.com.tw/mobile_app/anime/v2/questionnaire.php"
     headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
     resp = requests.post(url, headers=headers, data={"answer": answer}, timeout=15)
     print(f"[DEBUG] 提交答案 HTTP {resp.status_code}, body={resp.text[:200]}")
-    if resp.status_code == 403:
-        return {"message": "⏭️ Cloudflare 擋住，答題未完成"}
+    if resp.status_code in (403, 404):
+        return {"message": f"⏭️ API 不通 (HTTP {resp.status_code})"}
     resp.raise_for_status()
     return resp.json()
 
@@ -182,7 +184,7 @@ def do_anime_answer() -> str:
             if "沒有" in msg or "無題" in msg:
                 print("今日動畫瘋無題目")
                 return "今日無題目"
-            if "Cloudflare" in msg:
+            if "API 不通" in msg:
                 return f"⏭️ {msg}"
 
         answer = fetch_answer_from_blackxblue()
