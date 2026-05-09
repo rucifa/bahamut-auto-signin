@@ -21,13 +21,6 @@ def send_email(subject: str, body: str):
         smtp.send_message(msg)
     print(f"Email 已發送：{subject}")
 
-def get_csrf_token() -> str:
-    for item in COOKIE.split(";"):
-        item = item.strip()
-        if item.startswith("ckBahamutCsrfToken="):
-            return item.split("=", 1)[1]
-    return ""
-
 def get_log_url() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
@@ -36,18 +29,12 @@ def get_log_url() -> str:
     return "https://github.com/你的帳號/你的Repo/actions"
 
 def get_cookie_expiry() -> tuple:
-    """
-    從 BAHARUNE JWT Token 解析到期時間
-    回傳 (到期日字串, 剩餘天數)
-    """
     try:
         for item in COOKIE.split(";"):
             item = item.strip()
             if item.startswith("BAHARUNE="):
                 jwt = item.split("=", 1)[1]
-                # JWT 格式：header.payload.signature
                 payload_b64 = jwt.split(".")[1]
-                # 補齊 Base64 padding
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
                 exp_timestamp = payload.get("exp", 0)
@@ -59,12 +46,11 @@ def get_cookie_expiry() -> tuple:
         print(f"解析 JWT 失敗：{e}")
     return "未知", -1
 
-def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
+def try_endpoint(method: str, url: str, headers: dict):
     if method == "GET":
         resp = requests.get(url, headers=headers, timeout=15)
     else:
-        resp = requests.post(url, headers=headers,
-                             data={"csrf_token": csrf_token}, timeout=15)
+        resp = requests.post(url, headers=headers, timeout=15)
 
     print(f"[{method}] {url} → {resp.status_code}")
 
@@ -74,7 +60,7 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
     text = resp.text.strip()
 
     if text.lower().startswith("<!doctype") or "找不到網頁" in text:
-        return False, "回傳 HTML 錯誤頁（端點不存在）"
+        return False, "回傳 HTML 錯誤頁"
 
     try:
         data = resp.json()
@@ -85,7 +71,6 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
         return True, text
 
 def do_signin():
-    csrf_token = get_csrf_token()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
@@ -94,7 +79,6 @@ def do_signin():
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
-        "X-CSRF-Token": csrf_token
     }
 
     endpoints = [
@@ -107,24 +91,23 @@ def do_signin():
 
     for method, url in endpoints:
         try:
-            success, result = try_endpoint(method, url, headers, csrf_token)
+            success, result = try_endpoint(method, url, headers)
             if success:
-                return url, method, result
+                print(f"簽到成功，端點：[{method}] {url}")
+                return
         except Exception as e:
             print(f"端點例外：{e}")
             continue
 
-    raise Exception("所有端點均失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
+    raise Exception("所有端點均失敗，請重新從瀏覽器取得 Cookie 更新 GitHub Secret")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_url = get_log_url()
 
-    # 檢查 Cookie 到期時間
     exp_date, days_left = get_cookie_expiry()
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # 到期提醒訊息（剩餘 7 天以內才顯示警告）
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
     elif days_left <= 7:
@@ -134,21 +117,14 @@ def main():
 
     try:
         print("正在執行簽到...")
-        url, method, data = do_signin()
-
-        if isinstance(data, dict):
-            days = data.get("data", {}).get("days", "")
-            days_msg = f"\n連續簽到：{days} 天" if days else ""
-        else:
-            days_msg = ""
+        do_signin()
 
         body = (
             f"簽到時間：{now}"
-            f"{days_msg}"
             f"{expiry_warning}\n\n"
             f"完整 Log：{log_url}"
         )
-        print(f"簽到成功：{body}")
+        print("簽到成功")
         send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
