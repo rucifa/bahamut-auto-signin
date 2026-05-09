@@ -105,23 +105,73 @@ def do_signin() -> dict:
 def fetch_answer_from_blackxblue() -> str:
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
+    headers.pop("Content-Type", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    list_url = "https://home.gamer.com.tw/creation.php?owner=blackxblue"
-    print(f"[DEBUG] 抓取創作列表 → {list_url}")
-    resp = requests.get(list_url, headers=headers, timeout=15)
-    resp.raise_for_status()
-    print(f"[DEBUG] 創作列表 HTTP {resp.status_code}, 長度 {len(resp.text)}")
+    # 用 AJAX API 直接拿文章列表 JSON（需帶 Cookie）
+    api_url = "https://home.gamer.com.tw/ajax/getCreationList.php?owner=blackxblue&page=1"
+    print(f"[DEBUG] 嘗試 AJAX API → {api_url}")
+    resp = requests.get(api_url, headers=headers, timeout=15)
+    print(f"[DEBUG] AJAX API HTTP {resp.status_code}, body前200：{resp.text[:200]}")
 
-    # 印出 HTML 供 debug，找包含 sn 的那段
-    text = resp.text
-    print(f"[DEBUG] HTML 前 2000 字：\n{text[:2000]}")
+    sn = None
 
-    # 找所有包含 sn 的 href
-    all_links = re.findall(r'href=["\']([^"\']*sn[^"\']*)["\']', text)
-    print(f"[DEBUG] 含 sn 的 href（前10）：{all_links[:10]}")
+    if resp.status_code == 200 and resp.text.strip().startswith("{"):
+        try:
+            data = resp.json()
+            items = data.get("data", data.get("items", []))
+            if items:
+                sn = str(items[0].get("sn", ""))
+                print(f"[DEBUG] 從 AJAX API 取得 sn：{sn}")
+        except Exception as e:
+            print(f"[DEBUG] AJAX API JSON 解析失敗：{e}")
 
-    raise Exception("DEBUG 模式，請查看上方 log 後回報")
+    # AJAX API 失敗的話，改抓 RSS Feed
+    if not sn:
+        rss_url = "https://home.gamer.com.tw/rss.php?owner=blackxblue"
+        print(f"[DEBUG] 嘗試 RSS → {rss_url}")
+        resp2 = requests.get(rss_url, headers=headers, timeout=15)
+        print(f"[DEBUG] RSS HTTP {resp2.status_code}, body前500：{resp2.text[:500]}")
+        if resp2.status_code == 200:
+            m = re.search(r'artwork\.php\?sn=(\d+)', resp2.text)
+            if not m:
+                m = re.search(r'<link>.*?sn=(\d+)', resp2.text)
+            if m:
+                sn = m.group(1)
+                print(f"[DEBUG] 從 RSS 取得 sn：{sn}")
+
+    if not sn:
+        raise Exception("無法取得最新文章 sn（AJAX API 與 RSS 均失敗）")
+
+    # 抓文章內容解析答案
+    article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
+    print(f"[DEBUG] 抓取文章 → {article_url}")
+    headers2 = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
+    headers2.pop("X-Requested-With", None)
+    headers2["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    resp3 = requests.get(article_url, headers=headers2, timeout=15)
+    resp3.raise_for_status()
+    content = resp3.text
+    print(f"[DEBUG] 文章 HTTP {resp3.status_code}, 長度 {len(content)}")
+
+    patterns = [
+        r'A[:：]([1-4ABCD])',
+        r'答案[：:是為]\s*([1-4ABCD])',
+        r'正確答案[：:]\s*([1-4ABCD])',
+        r'[Aa]nswer[：:\s]+([1-4ABCD])',
+        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, content)
+        if match:
+            val = match.group(1).upper()
+            answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
+            print(f"解析到答案：{answer}")
+            return answer
+
+    print(f"[DEBUG] 文章內容前 500 字：{content[:500]}")
+    raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
 
 
 # ────────────────────────────────────────────
@@ -146,6 +196,7 @@ def main():
     answer_result = "未執行"
     has_error = False
 
+    # ── 簽到 ──
     try:
         print("\n========== 簽到 ==========")
         status_data = get_signin_status()
@@ -171,6 +222,7 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
+    # ── 動畫瘋答題：抓答案後通知手動作答 ──
     print("\n========== 動畫瘋答題 ==========")
     try:
         answer = fetch_answer_from_blackxblue()
@@ -180,6 +232,7 @@ def main():
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
 
+    # ── 發送 Email 通知 ──
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
