@@ -107,10 +107,10 @@ def fetch_answer_from_blackxblue() -> str:
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    # 以 2026-05-09 的 sn=6331391 為基準，每天約加 1
+    # 基準點：2026-05-09 / sn=6331391
+    # 若日後漂移，把這兩行改成最近一次成功的日期和 sn
     BASE_DATE = date(2026, 5, 9)
     BASE_SN = 6331391
-    # 使用台灣時間（UTC+8）
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     delta = (today - BASE_DATE).days
     estimated_sn = BASE_SN + delta
@@ -123,17 +123,24 @@ def fetch_answer_from_blackxblue() -> str:
         today.strftime("%Y-%m-%d"),
     ]
 
-    for offset in [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5]:
+    patterns = [
+        r'A[:：]([1-4ABCD])',
+        r'答案[：:是為]\s*([1-4ABCD])',
+        r'正確答案[：:]\s*([1-4ABCD])',
+        r'[Aa]nswer[：:\s]+([1-4ABCD])',
+        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+    ]
+
+    # 第一輪：精確比對今天日期（±7 範圍）
+    for offset in range(-7, 8):
         sn = estimated_sn + offset
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
         print(f"[DEBUG] 嘗試 sn={sn}")
         try:
             resp = requests.get(article_url, headers=headers, timeout=15)
-        except Exception as e:
-            print(f"[DEBUG] sn={sn} 請求失敗：{e}")
+        except Exception:
             continue
         if resp.status_code != 200:
-            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}，跳過")
             continue
         content = resp.text
 
@@ -142,25 +149,38 @@ def fetch_answer_from_blackxblue() -> str:
         if not is_today:
             continue
 
-        patterns = [
-            r'A[:：]([1-4ABCD])',
-            r'答案[：:是為]\s*([1-4ABCD])',
-            r'正確答案[：:]\s*([1-4ABCD])',
-            r'[Aa]nswer[：:\s]+([1-4ABCD])',
-            r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
-        ]
         for pattern in patterns:
             match = re.search(pattern, content)
             if match:
                 val = match.group(1).upper()
                 answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
-                print(f"解析到答案：{answer}")
+                print(f"解析到答案（精確）：{answer}，sn={sn}")
                 return answer
 
         print(f"[DEBUG] sn={sn} 找到今日文章但解析不到答案，內容前 500 字：{content[:500]}")
-        raise Exception("找到今日文章但無法解析答案")
+        raise Exception("找到今日文章但無法解析答案，格式可能已變更")
 
-    raise Exception(f"在 sn {estimated_sn-5}~{estimated_sn+5} 範圍內找不到今天的 blackxblue 文章")
+    # 第二輪：日期比對失敗，改用最近 sn 只要有答案格式就用
+    print("[DEBUG] 精確日期比對失敗，改用最近 sn 寬鬆掃描...")
+    for offset in range(-3, 4):
+        sn = estimated_sn + offset
+        article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
+        try:
+            resp = requests.get(article_url, headers=headers, timeout=15)
+        except Exception:
+            continue
+        if resp.status_code != 200:
+            continue
+        content = resp.text
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                val = match.group(1).upper()
+                answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
+                print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
+                return answer
+
+    raise Exception(f"在 sn {estimated_sn-7}~{estimated_sn+7} 範圍內找不到答案，請手動更新 BASE_SN")
 
 
 # ────────────────────────────────────────────
