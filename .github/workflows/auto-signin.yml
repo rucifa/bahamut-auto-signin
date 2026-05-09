@@ -2,7 +2,7 @@ name: 巴哈姆特自動簽到
 
 on:
   schedule:
-    - cron: "10 0 * * *"   # 台灣時間早上 08:10
+    - cron: "5 16 * * *"   # UTC 16:05 = 台灣時間 00:05
   workflow_dispatch:        # 允許手動觸發測試
 
 jobs:
@@ -11,15 +11,14 @@ jobs:
 
     steps:
       - name: Checkout 程式碼
-        uses: actions/checkout@v4   # ← 這個是 GitHub 官方 Action，不會被封鎖
+        uses: actions/checkout@v4
 
       - name: 安裝 Python 套件
         run: pip install requests
 
       - name: 執行簽到腳本
         env:
-          BAHAMUT_USERNAME: ${{ secrets.BAHAMUT_USERNAME }}
-          BAHAMUT_PASSWORD: ${{ secrets.BAHAMUT_PASSWORD }}
+          BAHAMUT_COOKIE: ${{ secrets.BAHAMUT_COOKIE }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
