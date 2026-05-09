@@ -180,9 +180,10 @@ def do_anime_answer_playwright() -> str:
             print(f"[PLAYWRIGHT] 文章標題：{title_match.group(1) if title_match else '未知'}")
             print(f"[PLAYWRIGHT] 文章內容長度：{len(content)}")
 
-            # 支援數字（1/2/3/4）與字母（A/B/C/D）兩種格式
+            # 支援格式：A:3、A：3、答案:3、答案:A、Answer:A
             answer = None
             for pattern in [
+                r'A[:：]([1-4ABCD])',
                 r'答案[：:是為]\s*([1-4ABCD])',
                 r'正確答案[：:]\s*([1-4ABCD])',
                 r'[Aa]nswer[：:\s]+([1-4ABCD])',
