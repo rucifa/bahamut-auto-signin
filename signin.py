@@ -7,7 +7,7 @@ import re
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import stealth
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -130,8 +130,7 @@ def cookie_str_to_list(cookie_str: str) -> list:
     return cookies
 
 
-def wait_for_cloudflare(page, timeout_ms: int = 15000):
-    """等待 Cloudflare JS Challenge 完成，直到頁面標題不再是「請稍候」"""
+def wait_for_cloudflare(page, timeout_ms: int = 20000):
     print("[PLAYWRIGHT] 等待 Cloudflare JS Challenge 完成...")
     try:
         page.wait_for_function(
@@ -172,8 +171,8 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
-            # 套用 stealth 模式，隱藏自動化特徵
-            stealth_sync(page)
+            # 套用 stealth 模式
+            stealth(page)
             print("[PLAYWRIGHT] Stealth 模式已啟用")
 
             # ── 步驟一：導向 blackxblue 創作列表，抓最新文章 sn ──
@@ -220,7 +219,7 @@ def do_anime_answer_playwright() -> str:
 
             print(f"[PLAYWRIGHT] 解析到答案：{answer}")
 
-            # ── 步驟三：導向動畫瘋首頁，等待 Cloudflare JS 跑完 ──
+            # ── 步驟三：導向動畫瘋首頁，等待 Cloudflare 通過 ──
             print("[PLAYWRIGHT] 導向到動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
             wait_for_cloudflare(page, timeout_ms=20000)
@@ -228,7 +227,6 @@ def do_anime_answer_playwright() -> str:
             print(f"[PLAYWRIGHT] 最終標題：{page.title()}")
             print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
 
-            # 如果還是「請稍候」代表 CF 沒過
             if "請稍候" in page.title() or "Just a moment" in page.title():
                 browser.close()
                 return "⏭️ 跳過（Cloudflare JS Challenge 未通過）"
