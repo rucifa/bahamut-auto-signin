@@ -45,10 +45,12 @@ def get_cookie_expiry() -> tuple:
                 exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc).astimezone()
                 now = datetime.now(tz=timezone.utc)
                 days_left = (datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) - now).days
-                return exp_dt.strftime("%Y-%m-%d"), days_left
+                username = payload.get("username", "未知")
+                userid = payload.get("userid", payload.get("uid", "未知"))
+                return exp_dt.strftime("%Y-%m-%d"), days_left, username, userid
     except Exception as e:
         print(f"解析 JWT 失敗：{e}")
-    return "未知", -1
+    return "未知", -1, "未知", "未知"
 
 
 def get_csrf_token() -> str:
@@ -59,12 +61,14 @@ def get_csrf_token() -> str:
     return ""
 
 
-def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
+def build_headers(referer: str = "https://www.gamer.com.tw/",
+                  origin: str = "https://www.gamer.com.tw") -> dict:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
         "Referer": referer,
-        "Origin": "https://www.gamer.com.tw",
+        "Origin": origin,
+        "Content-Type": "application/x-www-form-urlencoded",
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
@@ -75,31 +79,32 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
 def get_signin_status() -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 查詢簽到狀態 → POST {url}")
-    resp = requests.post(url, headers=build_headers(), data="action=2", timeout=15)
+    resp = requests.post(url, headers=build_headers(), data={"action": "2"}, timeout=15)
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
     print(f"[DEBUG] 簽到狀態 JSON：{json.dumps(result, ensure_ascii=False)}")
+    if "error" in result:
+        raise Exception(result["error"].get("message", "未知錯誤"))
     return result.get("data", {})
 
 
 def do_signin() -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 執行簽到 → POST {url}")
-    resp = requests.post(url, headers=build_headers(), data="action=1", timeout=15)
+    resp = requests.post(url, headers=build_headers(), data={"action": "1"}, timeout=15)
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
     print(f"[DEBUG] 簽到結果 JSON：{json.dumps(result, ensure_ascii=False)}")
-    if isinstance(result, dict) and "error" in result:
-        err_msg = result["error"].get("message", "未知錯誤")
-        raise Exception(f"簽到 API 錯誤：{err_msg}")
+    if "error" in result:
+        raise Exception(result["error"].get("message", "未知錯誤"))
     return result.get("data", result)
 
 
 def fetch_answer_from_blackxblue() -> str:
     list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
-    headers = build_headers("https://home.gamer.com.tw/")
+    headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
 
     resp = requests.get(list_url, headers=headers, timeout=15)
     resp.raise_for_status()
@@ -122,46 +127,45 @@ def fetch_answer_from_blackxblue() -> str:
     content = resp2.text
 
     patterns = [
-        r'答案[：:是為]\s*([ABCD])',
-        r'[Aa]nswer[：:\s]+([ABCD])',
-        r'正確答案[：:]\s*([ABCD])',
+        r'A[:：]([1-4ABCD])',
+        r'答案[：:是為]\s*([1-4ABCD])',
+        r'正確答案[：:]\s*([1-4ABCD])',
+        r'[Aa]nswer[：:\s]+([1-4ABCD])',
         r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
     ]
 
     for pattern in patterns:
         match = re.search(pattern, content)
         if match:
-            answer = match.group(1).upper()
+            val = match.group(1).upper()
+            answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
             print(f"解析到答案：{answer}")
             return answer
 
+    print(f"[DEBUG] 文章內容前 500 字：{content[:500]}")
     raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
 
 
 def get_anime_question() -> dict:
-    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/")
-    headers["Origin"] = "https://ani.gamer.com.tw"
+    url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
+    headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
     resp = requests.get(url, headers=headers, timeout=15)
-    print(f"[DEBUG] 查詢答題狀態 HTTP {resp.status_code}")
+    print(f"[DEBUG] 查詢答題狀態 HTTP {resp.status_code}, body={resp.text[:200]}")
+    if resp.status_code == 403:
+        return {"status": 0, "message": "Cloudflare 擋住，無法查詢"}
     resp.raise_for_status()
-    data = resp.json()
-    print(f"[DEBUG] 答題狀態：{json.dumps(data, ensure_ascii=False)}")
-    return data
+    return resp.json()
 
 
 def submit_anime_answer(answer: str) -> dict:
-    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/")
-    headers["Origin"] = "https://ani.gamer.com.tw"
-    headers["Content-Type"] = "application/x-www-form-urlencoded"
-    resp = requests.post(url, headers=headers, data=f"answer={answer}", timeout=15)
+    url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
+    headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
+    resp = requests.post(url, headers=headers, data={"answer": answer}, timeout=15)
     print(f"[DEBUG] 提交答案 HTTP {resp.status_code}, body={resp.text[:200]}")
+    if resp.status_code == 403:
+        return {"message": "⏭️ Cloudflare 擋住，答題未完成"}
     resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict):
-        print(f"答題回應：{data.get('status', '未知')} / {data.get('message', '無')}")
-    return data
+    return resp.json()
 
 
 def do_anime_answer() -> str:
@@ -169,14 +173,17 @@ def do_anime_answer() -> str:
         question_data = get_anime_question()
 
         status = question_data.get("status", 0)
+        msg = question_data.get("message", "")
+
         if status == 0:
-            msg = question_data.get("message", "")
             if "已作答" in msg or "already" in msg.lower():
                 print("今日動畫瘋已答題，略過")
                 return "今日已答題（略過）"
             if "沒有" in msg or "無題" in msg:
                 print("今日動畫瘋無題目")
                 return "今日無題目"
+            if "Cloudflare" in msg:
+                return f"⏭️ {msg}"
 
         answer = fetch_answer_from_blackxblue()
         result = submit_anime_answer(answer)
@@ -194,7 +201,8 @@ def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
-    exp_date, days_left = get_cookie_expiry()
+    exp_date, days_left, username, userid = get_cookie_expiry()
+    print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
     if days_left < 0:
@@ -244,7 +252,7 @@ def main():
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
-        f"Cookie 到期日：{exp_date}（剩餘 {days_left} 天）\n"
+        f"帳號：{username}（ID：{userid}）\n"
         f"執行時間：{now}\n"
         f"每日簽到：{signin_result}\n"
         + (f"{streak_info}\n" if streak_info else "")
