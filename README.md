@@ -20,7 +20,7 @@
 
 **用解析工具確認內容：**
 
-- 開啟 🔍 [Bahamut Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
+- 開啟 🔍 [ 巴哈姆特 Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
 - 將複製的 Cookie 字串貼入，按「解析 Cookie」
 - 確認顯示正確帳號暱稱、會員 ID 與到期日後再繼續
 
