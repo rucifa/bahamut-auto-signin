@@ -36,18 +36,12 @@ def get_log_url() -> str:
     return "https://github.com/你的帳號/你的Repo/actions"
 
 def get_cookie_expiry() -> tuple:
-    """
-    從 BAHARUNE JWT Token 解析到期時間
-    回傳 (到期日字串, 剩餘天數)
-    """
     try:
         for item in COOKIE.split(";"):
             item = item.strip()
             if item.startswith("BAHARUNE="):
                 jwt = item.split("=", 1)[1]
-                # JWT 格式：header.payload.signature
                 payload_b64 = jwt.split(".")[1]
-                # 補齊 Base64 padding
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
                 exp_timestamp = payload.get("exp", 0)
@@ -97,34 +91,30 @@ def do_signin():
         "X-CSRF-Token": csrf_token
     }
 
+    # 只測試 www.gamer.com.tw 的端點
     endpoints = [
         ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
         ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
-        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
-        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
-        ("GET",  "https://api.gamer.com.tw/bahamut/v1/signin.php"),
     ]
 
     for method, url in endpoints:
         try:
             success, result = try_endpoint(method, url, headers, csrf_token)
             if success:
-                return url, method, result
+                return result
         except Exception as e:
             print(f"端點例外：{e}")
             continue
 
-    raise Exception("所有端點均失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
+    raise Exception("簽到失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_url = get_log_url()
 
-    # 檢查 Cookie 到期時間
     exp_date, days_left = get_cookie_expiry()
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # 到期提醒訊息（剩餘 7 天以內才顯示警告）
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
     elif days_left <= 7:
@@ -134,21 +124,14 @@ def main():
 
     try:
         print("正在執行簽到...")
-        url, method, data = do_signin()
-
-        if isinstance(data, dict):
-            days = data.get("data", {}).get("days", "")
-            days_msg = f"\n連續簽到：{days} 天" if days else ""
-        else:
-            days_msg = ""
+        do_signin()
 
         body = (
             f"簽到時間：{now}"
-            f"{days_msg}"
             f"{expiry_warning}\n\n"
             f"完整 Log：{log_url}"
         )
-        print(f"簽到成功：{body}")
+        print(f"簽到成功")
         send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
