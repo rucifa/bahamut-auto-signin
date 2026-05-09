@@ -180,15 +180,20 @@ def do_anime_answer_playwright() -> str:
             print(f"[PLAYWRIGHT] 文章標題：{title_match.group(1) if title_match else '未知'}")
             print(f"[PLAYWRIGHT] 文章內容長度：{len(content)}")
 
+            # 支援數字（1/2/3/4）與字母（A/B/C/D）兩種格式
             answer = None
             for pattern in [
-                r'答案[：:是為]\s*([ABCD])',
-                r'正確答案[：:]\s*([ABCD])',
-                r'[Aa]nswer[：:\s]+([ABCD])',
+                r'答案[：:是為]\s*([1-4ABCD])',
+                r'正確答案[：:]\s*([1-4ABCD])',
+                r'[Aa]nswer[：:\s]+([1-4ABCD])',
             ]:
                 m = re.search(pattern, content)
                 if m:
-                    answer = m.group(1).upper()
+                    val = m.group(1).upper()
+                    if val in ['1', '2', '3', '4']:
+                        answer = ['A', 'B', 'C', 'D'][int(val) - 1]
+                    else:
+                        answer = val
                     break
 
             if not answer:
