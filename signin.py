@@ -46,7 +46,39 @@ def get_cookie_expiry() -> tuple:
         print(f"解析 JWT 失敗：{e}")
     return "未知", -1
 
+def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
+    if method == "GET":
+        resp = requests.get(url, headers=headers, timeout=15)
+    else:
+        resp = requests.post(url, headers=headers,
+                             data={"csrf_token": csrf_token}, timeout=15)
+
+    print(f"[{method}] {url} → {resp.status_code}")
+
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+
+    text = resp.text.strip()
+
+    if text.lower().startswith("<!doctype") or "找不到網頁" in text:
+        return False, "回傳 HTML 錯誤頁（端點不存在）"
+
+    try:
+        data = resp.json()
+        print(f"JSON 回應：{data}")
+        return True, data
+    except Exception:
+        print(f"純文字回應：{text[:100]}")
+        return True, text
+
 def do_signin():
+    csrf_token = ""
+    for item in COOKIE.split(";"):
+        item = item.strip()
+        if item.startswith("ckBahamutCsrfToken="):
+            csrf_token = item.split("=", 1)[1]
+            break
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
@@ -55,43 +87,28 @@ def do_signin():
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
+        "X-CSRF-Token": csrf_token
     }
 
     endpoints = [
         ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
         ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("GET",  "https://api.gamer.com.tw/bahamut/v1/signin.php"),
     ]
 
     for method, url in endpoints:
         try:
-            if method == "GET":
-                resp = requests.get(url, headers=headers, timeout=15)
-            else:
-                resp = requests.post(url, headers=headers, timeout=15)
-
-            print(f"[{method}] {url} → {resp.status_code}")
-
-            if resp.status_code != 200:
-                print(f"非 200，跳過")
-                continue
-
-            text = resp.text.strip()
-
-            # 回傳 HTML 錯誤頁代表端點不存在
-            if text.lower().startswith("<!doctype") or "找不到網頁" in text:
-                print(f"回傳 HTML 錯誤頁，跳過")
-                continue
-
-            # 非 HTML → 視為簽到成功（click_signin.php 正常回應）
-            print(f"回應內容：{text[:100]}")
-            print(f"簽到成功，端點：[{method}] {url}")
-            return
-
+            success, result = try_endpoint(method, url, headers, csrf_token)
+            if success:
+                print(f"簽到成功，端點：[{method}] {url}")
+                return
         except Exception as e:
             print(f"端點例外：{e}")
             continue
 
-    raise Exception("簽到失敗，請重新從瀏覽器取得 Cookie 更新 GitHub Secret")
+    raise Exception("所有端點均失敗，請重新從瀏覽器取得 Cookie 更新 GitHub Secret")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
