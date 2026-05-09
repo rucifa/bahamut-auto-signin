@@ -7,7 +7,13 @@
 2. 按 `F12` 開啟開發者工具 → **Application** → **Cookies** → `https://www.gamer.com.tw`
 3. 全選所有 Cookie 並複製整段字串
 
-> 💡 **建議使用附帶的 `bahamut-cookie-parser.html`**：用瀏覽器開啟此檔案，貼入 Cookie 字串後可一鍵複製完整內容，並自動顯示到期日與剩餘天數。
+## Cookie 解析工具
+
+點擊以下連結直接在瀏覽器開啟，無需下載：
+
+👉 [開啟 Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
+
+> 工具完全在本地瀏覽器執行，不會上傳任何資料。
 
 ### 2. 設定 GitHub Secrets
 
