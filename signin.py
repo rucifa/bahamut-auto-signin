@@ -3,7 +3,6 @@ import smtplib
 import os
 import json
 import base64
-import re
 from email.mime.text import MIMEText
 from datetime import datetime, timezone
 
@@ -22,6 +21,13 @@ def send_email(subject: str, body: str):
         smtp.send_message(msg)
     print(f"Email 已發送：{subject}")
 
+def get_csrf_token() -> str:
+    for item in COOKIE.split(";"):
+        item = item.strip()
+        if item.startswith("ckBahamutCsrfToken="):
+            return item.split("=", 1)[1]
+    return ""
+
 def get_log_url() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
@@ -30,12 +36,18 @@ def get_log_url() -> str:
     return "https://github.com/你的帳號/你的Repo/actions"
 
 def get_cookie_expiry() -> tuple:
+    """
+    從 BAHARUNE JWT Token 解析到期時間
+    回傳 (到期日字串, 剩餘天數)
+    """
     try:
         for item in COOKIE.split(";"):
             item = item.strip()
             if item.startswith("BAHARUNE="):
                 jwt = item.split("=", 1)[1]
+                # JWT 格式：header.payload.signature
                 payload_b64 = jwt.split(".")[1]
+                # 補齊 Base64 padding
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
                 exp_timestamp = payload.get("exp", 0)
@@ -47,113 +59,72 @@ def get_cookie_expiry() -> tuple:
         print(f"解析 JWT 失敗：{e}")
     return "未知", -1
 
-def get_fresh_csrf_token(session: requests.Session) -> str:
-    """從巴哈首頁動態取得最新 CSRF Token"""
-    print("正在從首頁取得最新 CSRF Token...")
-    resp = session.get("https://www.gamer.com.tw/", timeout=15)
-    
-    # 方式1：從回應的 Set-Cookie 找新的 CSRF Token
-    new_cookie = resp.headers.get("Set-Cookie", "")
-    match = re.search(r"ckBahamutCsrfToken=([^;]+)", new_cookie)
-    if match:
-        token = match.group(1)
-        print(f"從 Set-Cookie 取得 CSRF Token：{token[:8]}...")
-        return token
+def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
+    if method == "GET":
+        resp = requests.get(url, headers=headers, timeout=15)
+    else:
+        resp = requests.post(url, headers=headers,
+                             data={"csrf_token": csrf_token}, timeout=15)
 
-    # 方式2：從 HTML 內容找 CSRF Token
-    match = re.search(r'csrfToken["\s:=]+["\']([^"\']+)["\']', resp.text)
-    if match:
-        token = match.group(1)
-        print(f"從 HTML 取得 CSRF Token：{token[:8]}...")
-        return token
+    print(f"[{method}] {url} → {resp.status_code}")
 
-    # 方式3：從原本 Cookie 取（最後手段）
-    for item in COOKIE.split(";"):
-        item = item.strip()
-        if item.startswith("ckBahamutCsrfToken="):
-            token = item.split("=", 1)[1]
-            print(f"使用原始 Cookie 的 CSRF Token：{token[:8]}...")
-            return token
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
 
-    print("⚠️ 找不到 CSRF Token")
-    return ""
+    text = resp.text.strip()
+
+    if text.lower().startswith("<!doctype") or "找不到網頁" in text:
+        return False, "回傳 HTML 錯誤頁（端點不存在）"
+
+    try:
+        data = resp.json()
+        print(f"JSON 回應：{data}")
+        return True, data
+    except Exception:
+        print(f"純文字回應：{text[:100]}")
+        return True, text
 
 def do_signin():
-    session = requests.Session()
-    session.headers.update({
+    csrf_token = get_csrf_token()
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "zh-TW,zh;q=0.9",
+        "Cookie": COOKIE,
         "Referer": "https://www.gamer.com.tw/",
         "Origin": "https://www.gamer.com.tw",
         "X-Requested-With": "XMLHttpRequest",
-    })
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "X-CSRF-Token": csrf_token
+    }
 
-    # 帶入原始 Cookie
-    session.headers.update({"Cookie": COOKIE})
+    endpoints = [
+        ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("GET",  "https://api.gamer.com.tw/bahamut/v1/signin.php"),
+    ]
 
-    # 動態取得最新 CSRF Token
-    csrf_token = get_fresh_csrf_token(session)
-
-    # 更新 Session 的 CSRF Token Header
-    session.headers.update({"X-CSRF-Token": csrf_token})
-
-    url = "https://api.gamer.com.tw/user/v1/signin.php"
-
-    # 嘗試 GET 和 POST 兩種方式
-    for method in ["GET", "POST"]:
+    for method, url in endpoints:
         try:
-            print(f"嘗試 [{method}] {url}")
-            if method == "GET":
-                resp = session.get(url, params={"csrf_token": csrf_token}, timeout=15)
-            else:
-                resp = session.post(url, data={"csrf_token": csrf_token}, timeout=15)
-
-            print(f"狀態碼：{resp.status_code}")
-
-            if resp.status_code != 200:
-                print(f"非 200，跳過")
-                continue
-
-            text = resp.text.strip()
-            if text.lower().startswith("<!doctype"):
-                print("回傳 HTML 錯誤頁，跳過")
-                continue
-
-            try:
-                data = resp.json()
-                print(f"JSON 回應：{data}")
-
-                if "error" in data:
-                    code = data["error"].get("status", "")
-                    msg = data["error"].get("message", "未知錯誤")
-                    print(f"API 錯誤：{code} - {msg}")
-                    continue
-
-                print("簽到成功！")
-                return data
-
-            except Exception:
-                print(f"純文字回應：{text[:100]}")
-                print("簽到成功！")
-                return text
-
+            success, result = try_endpoint(method, url, headers, csrf_token)
+            if success:
+                return url, method, result
         except Exception as e:
-            print(f"請求例外：{e}")
+            print(f"端點例外：{e}")
             continue
 
-    raise Exception(
-        "CSRF Token 驗證持續失敗\n"
-        "可能原因：Cookie 已失效，請重新從瀏覽器取得並更新 GitHub Secret"
-    )
+    raise Exception("所有端點均失敗，請手動從瀏覽器 F12 找出正確的簽到 API")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_url = get_log_url()
 
+    # 檢查 Cookie 到期時間
     exp_date, days_left = get_cookie_expiry()
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
+    # 到期提醒訊息（剩餘 7 天以內才顯示警告）
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
     elif days_left <= 7:
@@ -163,14 +134,21 @@ def main():
 
     try:
         print("正在執行簽到...")
-        do_signin()
+        url, method, data = do_signin()
+
+        if isinstance(data, dict):
+            days = data.get("data", {}).get("days", "")
+            days_msg = f"\n連續簽到：{days} 天" if days else ""
+        else:
+            days_msg = ""
 
         body = (
             f"簽到時間：{now}"
+            f"{days_msg}"
             f"{expiry_warning}\n\n"
             f"完整 Log：{log_url}"
         )
-        print("簽到成功")
+        print(f"簽到成功：{body}")
         send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
