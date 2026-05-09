@@ -33,7 +33,6 @@ def get_log_url() -> str:
 
 
 def parse_baharune_jwt() -> dict:
-    """從 BAHARUNE JWT 解析帳號資訊，回傳 username / userid / exp 等"""
     result = {"username": "未知", "userid": "未知", "exp_date": "未知", "days_left": -1}
     try:
         for item in COOKIE.split(";"):
@@ -43,10 +42,8 @@ def parse_baharune_jwt() -> dict:
                 payload_b64 = jwt.split(".")[1]
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
-
                 result["username"] = payload.get("username", "未知")
                 result["userid"] = payload.get("userid", payload.get("uid", "未知"))
-
                 exp_timestamp = payload.get("exp", 0)
                 exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
                 now = datetime.now(tz=timezone.utc)
@@ -59,7 +56,6 @@ def parse_baharune_jwt() -> dict:
 
 
 def validate_cookie() -> list:
-    """檢查必要欄位是否存在，回傳缺少的欄位清單"""
     required = ["BAHARUNE", "ckBahamutCsrfToken"]
     missing = []
     cookie_keys = [item.strip().split("=")[0] for item in COOKIE.split(";")]
@@ -91,10 +87,24 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
     }
 
 
+def build_ani_headers() -> dict:
+    # ★ Origin 和 Referer 都指向動畫瘋，避免 403
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Cookie": COOKIE,
+        "Referer": "https://ani.gamer.com.tw/",
+        "Origin": "https://ani.gamer.com.tw",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "X-CSRF-Token": get_csrf_token(),
+    }
+
+
 def get_signin_status() -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
-    headers = build_headers()
-    resp = requests.post(url, headers=headers, data="action=2", timeout=15)
+    resp = requests.post(url, headers=build_headers(), data="action=2", timeout=15)
     resp.raise_for_status()
     result = resp.json()
     print(f"[DEBUG] 簽到狀態 JSON：{json.dumps(result, ensure_ascii=False)}")
@@ -103,24 +113,20 @@ def get_signin_status() -> dict:
 
 def do_signin() -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
-    headers = build_headers()
-    resp = requests.post(url, headers=headers, data="action=1", timeout=15)
+    resp = requests.post(url, headers=build_headers(), data="action=1", timeout=15)
     resp.raise_for_status()
     result = resp.json()
     print(f"[DEBUG] 簽到結果 JSON：{json.dumps(result, ensure_ascii=False)}")
-
     if isinstance(result, dict) and "error" in result:
         err_msg = result["error"].get("message", "未知錯誤")
         raise Exception(f"簽到 API 錯誤：{err_msg}")
-
     return result.get("data", result)
 
 
 def do_anime_answer() -> str:
     try:
-        # ★ 使用新端點
         url = "https://ani.gamer.com.tw/ajax/questionnaire.php"
-        headers = build_headers("https://ani.gamer.com.tw/")
+        headers = build_ani_headers()  # ★ 使用動畫瘋專用 headers
 
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
@@ -171,7 +177,7 @@ def do_anime_answer() -> str:
 
     except requests.exceptions.HTTPError as e:
         print(f"動畫瘋答題 API 不可用（{e}），略過")
-        return "⏭️ 跳過（API 暫不可用）"
+        return f"⏭️ 跳過（{e}）"
     except Exception as e:
         print(f"動畫瘋答題失敗：{e}")
         return f"⏭️ 跳過（{e}）"
@@ -183,7 +189,6 @@ def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
-    # ── 解析帳號資訊 ──
     jwt_info = parse_baharune_jwt()
     username = jwt_info["username"]
     userid = jwt_info["userid"]
@@ -192,7 +197,6 @@ def main():
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # ── 驗證 Cookie 必要欄位 ──
     missing = validate_cookie()
     if missing:
         warn_msg = f"⚠️ Cookie 缺少必要欄位：{', '.join(missing)}，請重新設定 GitHub Secrets！"
@@ -212,7 +216,6 @@ def main():
     answer_result = "未執行"
     has_error = False
 
-    # ── 查詢簽到狀態 ──
     try:
         print("正在查詢簽到狀態...")
         status_data = get_signin_status()
@@ -238,11 +241,9 @@ def main():
         has_error = True
         print(f"簽到失敗：{e}")
 
-    # ── 動畫瘋答題 ──
     print("正在執行動畫瘋答題...")
     answer_result = do_anime_answer()
 
-    # ── 發送 Email 通知 ──
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
         f"帳號：{username}（ID：{userid}）\n"
