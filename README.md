@@ -1,108 +1,75 @@
-# 巴哈姆特自動簽到機器人 🤖
-
-自動化每日登入巴哈姆特並簽到，結果透過郵件通知。
-
-## 功能特性
-
-✅ 每日凌晨 12:05 自動簽到  
-✅ 成功/失敗郵件通知  
-✅ 使用 GitHub Actions 完全自動化  
-✅ 無需本地運行  
-✅ 支援任何 SMTP 郵件服務  
 
 ## 設定步驟
 
-### 1. 倉庫已建立
+### 1. 取得巴哈姆特 Cookie
 
-此倉庫已完成配置，所有程式碼已準備好。
+1. 用 Chrome / Edge 登入 [巴哈姆特](https://www.gamer.com.tw/)
+2. 按 `F12` 開啟開發者工具 → **Application** → **Cookies** → `https://www.gamer.com.tw`
+3. 全選所有 Cookie 並複製整段字串
 
-### 2. 添加 Secrets
+> 💡 **建議使用附帶的 `bahamut-cookie-parser.html`**：用瀏覽器開啟此檔案，貼入 Cookie 字串後可一鍵複製完整內容，並自動顯示到期日與剩餘天數。
 
-進入倉庫 → Settings → Secrets and variables → Actions，添加以下密鑰：
+### 2. 設定 GitHub Secrets
+
+進入倉庫 → **Settings → Secrets and variables → Actions**，新增以下 4 個密鑰：
 
 | 密鑰名稱 | 說明 | 範例 |
 |---------|------|------|
-| `BAHAMUT_USERNAME` | 巴哈姆特帳號 | `yourUsername` |
-| `BAHAMUT_PASSWORD` | 巴哈姆特密碼 | `yourPassword` |
-| `SENDER_EMAIL` | 寄件者郵箱（Gmail） | `your.email@gmail.com` |
-| `SENDER_PASSWORD` | Gmail 應用程式密碼 | `xxxx xxxx xxxx xxxx` |
-| `RECIPIENT_EMAIL` | 收件人郵箱 | `your.email@gmail.com` |
+| `BAHAMUT_COOKIE` | 完整 Cookie 字串 | `uid=xxx; BAHARUNE=eyJ...` |
+| `EMAIL_USER` | 寄件 Gmail 帳號 | `your.email@gmail.com` |
+| `EMAIL_PASS` | Gmail 應用程式密碼（非登入密碼） | `xxxx xxxx xxxx xxxx` |
+| `EMAIL_TO` | 收件信箱 | `your.email@gmail.com` |
 
-### 3. 使用 Gmail 的特殊設定
+### 3. 設定 Gmail 應用程式密碼
 
-1. 進入 https://myaccount.google.com/security
-2. 啟用「兩步驟驗證」
-3. 進入 https://myaccount.google.com/apppasswords
-4. 選擇 App：**Mail**，Device：**Windows 電腦**（或其他）
-5. 複製生成的 16 位應用程式密碼
+1. 前往 [Google 帳號安全性](https://myaccount.google.com/security)
+2. 啟用「**兩步驟驗證**」
+3. 前往 [應用程式密碼](https://myaccount.google.com/apppasswords)
+4. 選擇 App：**郵件**、Device：**Windows 電腦**（或其他）
+5. 複製產生的 16 位密碼，填入 `EMAIL_PASS` Secret
 
-### 執行時間
+### 4. 啟用 GitHub Actions
 
-- **排程時間**: 每天凌晨 12:05 台灣時間
-- **Cron 表達式**: `5 20 * * *` (UTC 時間)
-- 支援手動觸發：Actions 頁面點擊「Run workflow」
+首次使用若 Actions 未啟用，請進入倉庫 → **Actions** → 點擊「**I understand my workflows, go ahead and enable them**」。
+
+## 執行時間
+
+| 項目 | 內容 |
+|------|------|
+| 排程時間 | 每天台灣時間 **08:10**（UTC 00:10） |
+| Cron 表達式 | `10 0 * * *` |
+| 手動觸發 | Actions 頁面 → 選擇 Workflow → **Run workflow** |
+
+## Cookie 更新方式
+
+Cookie 有效期約 **30 天**，到期後簽到會失敗，程式會在郵件中提醒剩餘天數。
+
+更新步驟：
+1. 重新至巴哈姆特登入，複製新的 Cookie
+2. 使用 `bahamut-cookie-parser.html` 確認有效期
+3. 至 GitHub → **Settings → Secrets** → 更新 `BAHAMUT_COOKIE`
 
 ## 手動測試
 
-1. 進入倉庫 → Actions → Bahamut 自動簽到
-2. 點擊 "Run workflow" → "Run workflow"
-3. 等待 2-3 分鐘完成
-4. 檢查郵箱是否收到通知
-
-## 程式碼結構
-
-```
-bahamut-auto-signin/
-├── bahamut_signin.py              # 主要簽到腳本
-├── requirements.txt                # Python 依賴
-├── .github/workflows/
-│   └── bahamut-signin.yml         # GitHub Actions 工作流程
-└── README.md                       # 此說明文件
-```
-
-## 程式特點
-
-### 🔐 安全性
-- 使用 GitHub Secrets 存儲敏感信息，絕不在代碼中暴露
-- SMTP 連接使用 TLS 加密
-
-### 🤖 自動化
-- 使用 webdriver-manager 自動管理 ChromeDriver
-- 具有主備方案，確保 Chrome 初始化成功
-- 完整的錯誤捕捉和日誌記錄
-
-### 📧 通知系統
-- HTML 格式美觀郵件設計
-- 成功和失敗都會發送通知
-- 包含時間戳和詳細的錯誤信息
-
-### 🔄 容錯機制
-- 如果找不到簽到按鈕會嘗試替代方案
-- 登入失敗時會立即通知
-- ChromeDriver 安裝失敗時自動回退
+1. 進入倉庫 → **Actions** → 選擇「巴哈姆特自動簽到」
+2. 點擊 **Run workflow** → **Run workflow**
+3. 等待約 1 分鐘完成
+4. 確認收到郵件通知
 
 ## 故障排除
 
-### 未收到郵件
-- 檢查 SENDER_PASSWORD 是否為 Gmail 應用程式密碼
-- 檢查垃圾郵件資料夾
-- 檢查 Actions 運行日誌
-
-### 登入失敗
-- 確認帳號密碼正確
-- 檢查是否啟用了帳戶安全檢查
-- 查看 Actions 運行日誌中的詳細錯誤
-
-### Chrome/ChromeDriver 錯誤
-- webdriver-manager 會自動下載最新版本
-- 如果失敗會自動使用系統 Chrome
+| 問題 | 解決方式 |
+|------|---------|
+| 未收到郵件 | 確認 `EMAIL_PASS` 為應用程式密碼；檢查垃圾郵件匣 |
+| 簽到失敗 | Cookie 可能已過期，請重新取得並更新 Secret |
+| Actions 未執行 | 確認 Actions 已啟用；確認 cron 時間設定正確 |
 
 ## 安全提示
 
-⚠️ 絕不要在代碼中寫入帳密，只使用 Secrets  
-⚠️ 保持倉庫為私有狀態  
-⚠️ 定期檢查 Actions 執行日誌  
+⚠️ 請將此倉庫設為**私有（Private）**，避免 Cookie 洩漏  
+⚠️ 絕不在程式碼中直接寫入任何帳號資訊，一律使用 Secrets  
+⚠️ Cookie 到期時請盡速更新，避免長期失效  
 
-## 許可證
+## 授權
 
 MIT
