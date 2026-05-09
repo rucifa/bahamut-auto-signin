@@ -1,6 +1,19 @@
-# 巴哈姆特每日自動簽到 / Bahamut Auto Sign-in
+# 巴哈姆特每日自動簽到 + 答題通知 / Bahamut Auto Sign-in & Quiz Notifier
 
-自動執行巴哈姆特每日任務的 GitHub Actions 專案，支援 Cookie 到期提醒與 Email 通知。
+自動執行巴哈姆特每日任務的 GitHub Actions 專案，包含自動簽到、動畫瘋答題解析，以及 Email 通知功能。
+
+***
+
+## ✨ 功能一覽
+
+| 功能 | 方式 | 狀態 |
+|---|---|---|
+| 巴哈姆特每日簽到 | 全自動（`requests` HTTP） | ✅ 全自動 |
+| 巴哈姆特答題解析 | 抓取 blackxblue 文章自動解析答案 | ✅ 自動解析，Email 通知手動作答 |
+| Cookie 到期提醒 | 解析 JWT，7 天前預警 | ✅ 自動 |
+| 動畫瘋答題 | Cloudflare 防護擋住所有自動化請求 | ⚠️ 需手動（Email 通知提醒） |
+
+> ⚠️ 動畫瘋（`ani.gamer.com.tw`）目前受 Cloudflare Bot 偵測保護，無法從 GitHub Actions 直接存取。答案解析完成後會由 Email 通知，需手動前往作答。
 
 ***
 
@@ -20,7 +33,7 @@
 
 **用解析工具確認內容：**
 
-- 開啟 🔍 [ 巴哈姆特 Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
+- 開啟 🔍 [巴哈姆特 Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
 - 將複製的 Cookie 字串貼入，按「解析 Cookie」
 - 確認顯示正確帳號暱稱、會員 ID 與到期日後再繼續
 
@@ -45,7 +58,7 @@
 
 ### 步驟四：確認排程
 
-Actions 設定完成後即會依排程自動執行。預設時間為每天 **台灣時間 00:00（UTC 16:00）**。
+Actions 設定完成後即會依排程自動執行。預設時間為每天 **台灣時間 08:10（UTC 00:10）**。
 
 你也可以在 Actions 頁面手動點 **Run workflow** 來測試是否正常運作。
 
@@ -53,12 +66,12 @@ Actions 設定完成後即會依排程自動執行。預設時間為每天 **台
 
 ## ⏱ 修改排程時間
 
-排程定義在 `.github/workflows/signin.yml`：
+排程定義在 `.github/workflows/auto-signin.yml`：
 
 ```yaml
 on:
   schedule:
-    - cron: '0 16 * * *'   # UTC 16:00 = 台灣時間 00:00
+    - cron: '10 0 * * *'   # UTC 00:10 = 台灣時間 08:10
   workflow_dispatch:         # 保留手動觸發功能
 ```
 
@@ -68,11 +81,17 @@ on:
 
 ## 📧 Email 通知說明
 
-| 情境 | 通知行為 |
+每次執行後都會寄出 Email，包含以下資訊：
+
+| 情境 | 通知內容 |
 |---|---|
-| Cookie 剩餘 ≤ 7 天 | ⚠️ 寄出「請更新 Cookie」提醒信 |
-| Cookie 已過期 | ❌ 寄出「Cookie 已失效」緊急通知 |
-| 正常簽到成功 | 預設不寄信（可在 `signin.py` 自行開啟） |
+| 正常簽到成功 | ✅ 簽到結果 + 當前連續天數 |
+| 巴哈答題解析成功 | 📋 答案（A/B/C/D）與來源文章 SN |
+| 巴哈答題解析失敗 | ⚠️ 錯誤原因，需手動作答 |
+| Cookie 剩餘 ≤ 7 天 | ⚠️ 「請更新 Cookie」提醒 |
+| Cookie 已過期 | ❌ 「Cookie 已失效」緊急通知 |
+
+> 💡 動畫瘋答題目前無法自動作答，Email 中會附上提醒，請收到信後手動前往 [ani.gamer.com.tw](https://ani.gamer.com.tw/) 作答。
 
 ***
 
@@ -80,7 +99,7 @@ on:
 
 這是一個純前端工具，用於解析 Cookie 並輸出可直接貼到 GitHub Secrets 的字串。
 
-> 🔗 **直接開啟：**[Bahamut Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
+> 🔗 **直接開啟：**[巴哈姆特 Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
 
 **功能：**
 - 從 `BAHARUNE` JWT 解析帳號資訊，包含：
@@ -116,6 +135,27 @@ Cookie 有效期通常約 **30 天**，收到提醒信後請依以下步驟更�
 
 ***
 
+## 🧠 答題解析機制說明
+
+### 巴哈姆特答題
+
+每日會自動抓取巴哈姆特小屋文章（blackxblue 發布），透過正則表達式解析當天題目答案（A/B/C/D）。
+
+- 基準 SN：`BASE_SN = 6331391`（對應 `BASE_DATE = 2026-05-09`）
+- 以每日 +1 估算當天文章 SN，並在 ±7 範圍內自動搜尋
+- 解析成功後由 Email 通知答案，前往 [巴哈姆特簽到頁](https://www.gamer.com.tw/ajax/signin.php) 手動作答
+
+### 動畫瘋答題（限制）
+
+動畫瘋（`ani.gamer.com.tw`）受 Cloudflare 保護，GitHub Actions 使用的 Azure 資料中心 IP 會被直接封鎖，目前**無法從 Actions 發送任何請求**。
+
+如需全自動化動畫瘋答題，可考慮以下替代方案：
+
+- **NAS / 本機排程**：在家用 IP 環境下執行 Playwright（Cloudflare 不封家用 IP）
+- **Self-hosted GitHub Actions Runner**：將 NAS 設為 Actions 執行節點，保留現有 `.yml` 架構，執行環境改為家用 IP
+
+***
+
 ## ⚠️ 注意事項
 
 - 此工具僅供個人學習與自動化使用，請勿用於大量帳號或商業目的
@@ -128,6 +168,9 @@ Cookie 有效期通常約 **30 天**，收到提醒信後請依以下步驟更�
 
 | 日期 | 說明 |
 |---|---|
+| 2026-05-09 | 新增巴哈答題自動解析（抓取 blackxblue 文章）與 Email 答案通知 |
+| 2026-05-09 | 排程時間調整為 UTC 00:10（台灣時間 08:10） |
+| 2026-05-09 | 新增 BASE_DATE / BASE_SN 基準點機制，提升文章 SN 搜尋準確率 |
 | 2026-05-09 | 修正 Cookie 解析工具連結為 htmlpreview 直接開啟網址 |
 | 2026-05-09 | 修正 BAHARUNE JWT 欄位解析（`userid` / `username` / `mid`），移除廢棄欄位警示 |
 | 2026-05-09 | Cookie 解析工具新增帳號資訊卡（暱稱 + 會員 ID + 帳號 + 到期日） |
