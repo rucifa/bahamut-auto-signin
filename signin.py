@@ -65,6 +65,7 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
         "Cookie": COOKIE,
         "Referer": referer,
         "Origin": "https://www.gamer.com.tw",
+        "Content-Type": "application/x-www-form-urlencoded",
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
@@ -72,121 +73,40 @@ def build_headers(referer: str = "https://www.gamer.com.tw/") -> dict:
     }
 
 
-def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
-    if method == "GET":
-        resp = requests.get(url, headers=headers, timeout=15)
-    else:
-        resp = requests.post(url, headers=headers,
-                             data={"csrf_token": csrf_token}, timeout=15)
-
-    print(f"[{method}] {url} → {resp.status_code}")
-
-    if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
-
-    text = resp.text.strip()
-
-    if text.lower().startswith("<!"):
-        return False, "回應為 HTML（可能未登入）"
-
-    try:
-        data = json.loads(text)
-        print(f"[DEBUG] 簽到回應 JSON：{json.dumps(data, ensure_ascii=False)}")
-        return True, data
-    except Exception:
-        print(f"[DEBUG] 簽到回應（非 JSON）：{text[:300]}")
-        return True, text
-
-
-def do_signin():
-    csrf_token = get_csrf_token()
-    headers = build_headers("https://home.gamer.com.tw/")
-
-    endpoints = [
-        ("POST", "https://home.gamer.com.tw/ajax/signin.php"),
-        ("GET",  "https://home.gamer.com.tw/ajax/signin.php"),
-        ("POST", "https://www.gamer.com.tw/ajax/signin.php"),
-    ]
-
-    for method, url in endpoints:
-        try:
-            success, result = try_endpoint(method, url, headers, csrf_token)
-            if success:
-                return result
-        except Exception as e:
-            print(f"端點 {url} 失敗：{e}")
-
-    raise Exception("所有簽到端點均失敗")
-
-
-def fetch_answer_from_blackxblue() -> str:
-    list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
-    headers = build_headers("https://home.gamer.com.tw/")
-
-    resp = requests.get(list_url, headers=headers, timeout=15)
+def get_signin_status() -> dict:
+    url = "https://www.gamer.com.tw/ajax/signin.php"
+    headers = build_headers()
+    resp = requests.post(url, headers=headers, data="action=2", timeout=15)
     resp.raise_for_status()
-
-    data = resp.json()
-    articles = data.get("data", [])
-    if not articles:
-        raise Exception("blackXblue 小屋沒有找到文章列表")
-
-    latest_sn = articles[0].get("sn", "")
-    if not latest_sn:
-        raise Exception("無法取得最新文章 sn")
-
-    print(f"最新文章 sn：{latest_sn}")
-
-    article_url = f"https://home.gamer.com.tw/creationDetail.php?sn={latest_sn}"
-    resp2 = requests.get(article_url, headers=headers, timeout=15)
-    resp2.raise_for_status()
-
-    content = resp2.text
-
-    patterns = [
-        r'答案[：:是為]\s*([ABCD])',
-        r'[Aa]nswer[：:\s]+([ABCD])',
-        r'正確答案[：:]\s*([ABCD])',
-        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, content)
-        if match:
-            answer = match.group(1).upper()
-            print(f"解析到答案：{answer}")
-            return answer
-
-    raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
+    result = resp.json()
+    print(f"[DEBUG] 簽到狀態 JSON：{json.dumps(result, ensure_ascii=False)}")
+    return result.get("data", {})
 
 
-def get_anime_question() -> dict:
-    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/")
-    resp = requests.get(url, headers=headers, timeout=15)
+def do_signin() -> dict:
+    url = "https://www.gamer.com.tw/ajax/signin.php"
+    headers = build_headers()
+    resp = requests.post(url, headers=headers, data="action=1", timeout=15)
     resp.raise_for_status()
-    data = resp.json()
-    print(f"問題取得狀態：{data.get('status', '未知')}")
-    return data
+    result = resp.json()
+    print(f"[DEBUG] 簽到結果 JSON：{json.dumps(result, ensure_ascii=False)}")
 
+    if isinstance(result, dict) and "error" in result:
+        err_msg = result["error"].get("message", "未知錯誤")
+        raise Exception(f"簽到 API 錯誤：{err_msg}")
 
-def submit_anime_answer(answer: str) -> dict:
-    url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/")
-    resp = requests.post(url, headers=headers,
-                         data={"answer": answer}, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict):
-        print(f"答題回應：{data.get('status', '未知')} / {data.get('message', '無')}")
-    else:
-        print("答題回應非 JSON")
-    return data
+    return result.get("data", result)
 
 
 def do_anime_answer() -> str:
     try:
-        question_data = get_anime_question()
+        url = "https://api.gamer.com.tw/anime/v1/questionnaire.php"
+        headers = build_headers("https://ani.gamer.com.tw/")
+
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        question_data = resp.json()
+        print(f"[DEBUG] 問題資料：{json.dumps(question_data, ensure_ascii=False)}")
 
         status = question_data.get("status", 0)
         if status == 0:
@@ -198,9 +118,35 @@ def do_anime_answer() -> str:
                 print("今日動畫瘋無題目")
                 return "今日無題目"
 
-        answer = fetch_answer_from_blackxblue()
-        result = submit_anime_answer(answer)
-        result_msg = result.get("message", "無回應訊息") if isinstance(result, dict) else str(result)
+        list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
+        r1 = requests.get(list_url, headers=build_headers("https://home.gamer.com.tw/"), timeout=15)
+        r1.raise_for_status()
+        articles = r1.json().get("data", [])
+        if not articles:
+            raise Exception("blackXblue 小屋沒有找到文章")
+
+        latest_sn = articles[0].get("sn", "")
+        r2 = requests.get(
+            f"https://home.gamer.com.tw/creationDetail.php?sn={latest_sn}",
+            headers=build_headers("https://home.gamer.com.tw/"), timeout=15
+        )
+        r2.raise_for_status()
+        content = r2.text
+
+        answer = None
+        for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'[Aa]nswer[：:\s]+([ABCD])']:
+            m = re.search(pattern, content)
+            if m:
+                answer = m.group(1).upper()
+                break
+        if not answer:
+            raise Exception("無法從 blackXblue 文章解析答案")
+        print(f"解析到答案：{answer}")
+
+        resp2 = requests.post(url, headers=headers, data={"answer": answer}, timeout=15)
+        resp2.raise_for_status()
+        result = resp2.json()
+        result_msg = result.get("message", "無回應") if isinstance(result, dict) else str(result)
         return f"答題完成（答案：{answer}），回應：{result_msg}"
 
     except requests.exceptions.HTTPError as e:
@@ -228,15 +174,32 @@ def main():
         expiry_warning = "\n\nCookie 到期日：" + exp_date + "（剩餘 " + str(days_left) + " 天）"
 
     signin_result = "未執行"
+    streak_info = ""
     answer_result = "未執行"
     has_error = False
 
-    # ── 簽到 ──
+    # ── 查詢簽到狀態 ──
     try:
-        print("正在執行簽到...")
-        do_signin()
-        signin_result = "✅ 成功"
-        print("簽到完成")
+        print("正在查詢簽到狀態...")
+        status_data = get_signin_status()
+        days = status_data.get("days", "?")
+        already_signed = status_data.get("signin", False)
+        streak_info = f"✨ 已連續簽到 {days} 天"
+        print(streak_info)
+
+        if already_signed:
+            print("今日已簽到，略過簽到步驟")
+            signin_result = "✅ 今日已簽到"
+        else:
+            # ── 執行簽到 ──
+            print("正在執行簽到...")
+            do_signin()
+            status_data2 = get_signin_status()
+            days = status_data2.get("days", days)
+            streak_info = f"✨ 已連續簽到 {days} 天"
+            signin_result = "✅ 成功"
+            print(f"簽到完成，{streak_info}")
+
     except Exception as e:
         signin_result = f"❌ 失敗：{e}"
         has_error = True
@@ -251,7 +214,8 @@ def main():
     body = (
         f"執行時間：{now}\n"
         f"每日簽到：{signin_result}\n"
-        f"動畫瘋答題：{answer_result}"
+        + (f"{streak_info}\n" if streak_info else "")
+        + f"動畫瘋答題：{answer_result}"
         + expiry_warning + "\n\n"
         + f"完整 Log：{log_url}"
     )
