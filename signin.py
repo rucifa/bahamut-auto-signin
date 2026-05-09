@@ -7,10 +7,12 @@ import re
 from datetime import datetime, timezone, timedelta, date
 from email.mime.text import MIMEText
 
+
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 EMAIL_TO = os.environ["EMAIL_TO"]
+
 
 
 def send_email(subject: str, body: str):
@@ -24,12 +26,14 @@ def send_email(subject: str, body: str):
     print(f"Email 已發送：{subject}")
 
 
+
 def get_log_url() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if repo and run_id:
         return f"https://github.com/{repo}/actions/runs/{run_id}"
     return "https://github.com/rucifa/bahamut-auto-signin/actions"
+
 
 
 def get_cookie_expiry() -> tuple:
@@ -53,6 +57,7 @@ def get_cookie_expiry() -> tuple:
     return "未知", -1, "未知", "未知"
 
 
+
 def get_csrf_token() -> str:
     for item in COOKIE.split(";"):
         item = item.strip()
@@ -61,7 +66,9 @@ def get_csrf_token() -> str:
     return ""
 
 
-def build_headers(referer: str = "https://www.gamer.com.tw/", origin: str = "https://www.gamer.com.tw") -> dict:
+
+def build_headers(referer: str = "https://www.gamer.com.tw/",
+                  origin: str = "https://www.gamer.com.tw") -> dict:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
@@ -73,6 +80,7 @@ def build_headers(referer: str = "https://www.gamer.com.tw/", origin: str = "htt
         "Accept-Language": "zh-TW,zh;q=0.9",
         "X-CSRF-Token": get_csrf_token(),
     }
+
 
 
 def get_signin_status() -> dict:
@@ -88,6 +96,7 @@ def get_signin_status() -> dict:
     return result.get("data", {})
 
 
+
 def do_signin() -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 執行簽到 → POST {url}")
@@ -101,55 +110,63 @@ def do_signin() -> dict:
     return result.get("data", result)
 
 
+
 def extract_title(content: str) -> str:
     """從 HTML 中抓出文章標題，供 debug 使用"""
-    m = re.search(r'<title>(.*?)</title>', content)
-    return m.group(1).strip() if m else "（無標題）"
+    m = re.search(r'<title>([^<]+)</title>', content)
+    return m.group(1).strip() if m else "（無法取得標題）"
+
 
 
 def try_parse_answer(content: str) -> str | None:
-    """從文章內容嘗試解析出答案（A/B/C/D）"""
+    """對 content 套用所有 regex，成功則回傳答案字母，否則回傳 None"""
     patterns = [
-        r'答[案:]\s*([A-D])',
-        r'\b([1-4ABCD])\b',
-        r'([1-4ABCD])',
-        r'A(?:nswer)?[:\s]*([1-4ABCD])',
-        r'([ABCD])?',
+        r'A[:：]([1-4ABCD])',
+        r'答案[：:是為]\s*([1-4ABCD])',
+        r'正確答案[：:]\s*([1-4ABCD])',
+        r'[Aa]nswer[：:\s]+([1-4ABCD])',
+        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
     ]
     for pattern in patterns:
         match = re.search(pattern, content)
         if match:
             val = match.group(1).upper()
-            return "ABCD"[int(val) - 1] if val in "1234" else val
+            return ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
     return None
+
 
 
 def fetch_answer_from_blackxblue() -> tuple[str, str]:
     """
     回傳 (answer, note)
-    - answer: 給 Email 顯示的簡潔答案，例如 "C"
-    - note:   給 DEBUG print 的詳細資訊，例如 "精確比對，sn=6331391"
+    answer: 答案字母 A/B/C/D
+    note:   附加說明，例如使用了寬鬆比對、命中的 sn
     """
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
+    # ──────────────────────────────────────────────────────────────
+    # 基準點：若日後漂移導致找不到文章，把這兩行改成最近一次成功的值
     BASE_DATE = date(2026, 5, 9)
-    BASE_SN = 6331391
+    BASE_SN   = 6331391
+    # ──────────────────────────────────────────────────────────────
 
-    today = datetime.now(tz=timezone.utc + timedelta(hours=8)).date()
+    today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     delta = (today - BASE_DATE).days
     estimated_sn = BASE_SN + delta
-    print(f"[DEBUG] 今日={today} 估算sn={estimated_sn}（BASE_SN={BASE_SN} + delta={delta}）")
+    print(f"[DEBUG] 今日台灣日期：{today}，估算 sn：{estimated_sn}（基準 {BASE_SN} + {delta} 天）")
 
     today_str_formats = [
         today.strftime("%m/%d"),
-        today.strftime("-%m-%d"),
-        today.strftime("%m%d"),
+        today.strftime("%-m/%-d"),
+        today.strftime("%Y/%m/%d"),
         today.strftime("%Y-%m-%d"),
     ]
 
     tried_sns = []
+
+    # ── 第一輪：精確比對（今天日期 + blackxblue，±7 sn 範圍）──────
     for offset in range(-7, 8):
         sn = estimated_sn + offset
         tried_sns.append(sn)
@@ -161,26 +178,32 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
             print(f"[DEBUG] sn={sn} 請求失敗：{e}")
             continue
         if resp.status_code != 200:
-            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}")
+            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}，跳過")
             continue
         content = resp.text
-        is_today = any(s in content for s in today_str_formats)
+
+        is_today      = any(s in content for s in today_str_formats)
         is_blackxblue = "blackxblue" in content
-        print(f"[DEBUG] sn={sn} is_today={is_today} is_blackxblue={is_blackxblue}")
+        print(f"[DEBUG] sn={sn} 是今天：{is_today}，是 blackxblue：{is_blackxblue}")
+
         if not is_today or not is_blackxblue:
             continue
-        title = extract_title(content)
-        parsed = try_parse_answer(content)
-        print(f"[DEBUG] sn={sn} 標題={title} 解析答案={parsed}")
-        if parsed:
-            note = f"精確比對，sn={sn}"
-            print(f"[DEBUG] 答案={parsed}，{note}")
-            return parsed, note
-        print(f"[DEBUG] sn={sn} 找到 blackxblue 文章但無法解析，前800字：{content[:800]}")
-        raise Exception(f"sn={sn} 標題《{title}》找到 blackxblue 文章但 regex 無法解析答案")
 
-    # 精確比對失敗，放寬只找 blackxblue
-    print(f"[DEBUG] 精確比對失敗，嘗試過：{tried_sns}，改為放寬搜尋...")
+        title  = extract_title(content)
+        answer = try_parse_answer(content)
+        print(f"[DEBUG] sn={sn} 文章標題：{title}")
+
+        if answer:
+            print(f"解析到答案（精確）：{answer}，sn={sn}")
+            return answer, f"精確比對，sn={sn}"
+
+        # 找到文章但 regex 全不匹配
+        print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案")
+        print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
+        raise Exception(f"找到今日文章（sn={sn}，標題：{title}）但無法解析答案，格式可能已變更")
+
+    # ── 第二輪：寬鬆比對（只確認 blackxblue，±5 sn 範圍）─────────
+    print(f"[DEBUG] 精確比對失敗（嘗試過：{tried_sns}），改用寬鬆掃描...")
     for offset in range(-5, 6):
         sn = estimated_sn + offset
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
@@ -193,91 +216,104 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
         content = resp.text
         if "blackxblue" not in content:
             continue
-        title = extract_title(content)
-        parsed = try_parse_answer(content)
-        print(f"[DEBUG] 放寬搜尋 sn={sn} 標題={title} 解析答案={parsed}")
-        if parsed:
-            note = f"放寬比對，sn={sn}"
-            print(f"[DEBUG] 答案={parsed}，{note}")
-            return parsed, note
+
+        title  = extract_title(content)
+        answer = try_parse_answer(content)
+        print(f"[DEBUG] 寬鬆掃描 sn={sn} 標題：{title}")
+
+        if answer:
+            print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
+            return answer, f"⚠️ 寬鬆比對（日期未命中），sn={sn}，標題：{title}"
 
     raise Exception(
-        f"搜尋範圍 sn={estimated_sn - 7}～{estimated_sn + 7} 均未找到符合的 blackxblue 文章 "
-        f"（嘗試過：{tried_sns}，BASE_DATE={BASE_DATE}，今日={today}，BASE_SN 可能需要更新）"
+        f"在 sn {estimated_sn - 7}~{estimated_sn + 7} 找不到 blackxblue 的文章\n"
+        f"嘗試過的 sn：{tried_sns}\n"
+        f"請手動將 BASE_DATE={today} / BASE_SN=??? 更新為今日正確值"
     )
 
 
+
+# ─────────────────────────────────────────────────────────────────
+
+
 def main():
-    now = datetime.now(tz=timezone.utc + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
+        "%Y-%m-%d %H:%M:%S (台灣時間)"
+    )
     log_url = get_log_url()
+
     exp_date, days_left, username, userid = get_cookie_expiry()
     print(f"帳號：{username}（ID：{userid}）")
-    print(f"Cookie 到期：{exp_date}，剩餘 {days_left} 天")
+    print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    if days_left <= 0:
-        expiry_warning = f"⚠️ Cookie 已於 {exp_date} 過期，請立即更新！"
+    if days_left < 0:
+        expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
     elif days_left <= 7:
-        expiry_warning = f"⚠️ Cookie 將於 {exp_date} 到期（剩 {days_left} 天），請盡快更新！"
+        expiry_warning = f"\n\n⚠️ Cookie 將於 {exp_date} 到期（剩餘 {days_left} 天），請盡快更新！"
     else:
-        expiry_warning = f"✅ Cookie 有效期至 {exp_date}（剩 {days_left} 天）"
+        expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
 
-    signin_result = ""
-    streak_info = ""
-    answer_result = ""
-    has_error = False
+    signin_result = "未執行"
+    streak_info   = ""
+    answer_result = "未執行"
+    has_error     = False
 
-    # --- 簽到 ---
-    print("=" * 40)
+    # ── 簽到 ──────────────────────────────────────────────────────
     try:
-        status_data = get_signin_status()
-        days = status_data.get("days", "?")
+        print("\n========== 簽到 ==========")
+        status_data    = get_signin_status()
+        days           = status_data.get("days", "?")
         already_signed = status_data.get("signin", False)
-        streak_info = f"連續簽到 {days} 天"
-        print(f"簽到狀態：{streak_info}，已簽到={already_signed}")
-        if already_signed:
-            signin_result = f"✅ 今日已簽到（{streak_info}）"
-            print(signin_result)
-        else:
-            do_signin()
-            status_data2 = get_signin_status()
-            days = status_data2.get("days", days)
-            streak_info = f"連續簽到 {days} 天"
-            signin_result = f"✅ 簽到成功（{streak_info}）"
-            print(signin_result)
-    except Exception as e:
-        signin_result = f"❌ 簽到失敗：{e}"
-        has_error = True
-        print(f"[ERROR] {signin_result}")
+        streak_info    = f"✨ 已連續簽到 {days} 天"
+        print(f"{streak_info}，今日已簽到：{already_signed}")
 
-    # --- 答題解析 ---
-    print("=" * 40)
+        if already_signed:
+            print("今日已簽到，略過簽到步驟")
+            signin_result = "✅ 今日已簽到"
+        else:
+            print("正在執行簽到...")
+            do_signin()
+            status_data2  = get_signin_status()
+            days          = status_data2.get("days", days)
+            streak_info   = f"✨ 已連續簽到 {days} 天"
+            signin_result = "✅ 成功"
+            print(f"簽到完成，{streak_info}")
+
+    except Exception as e:
+        signin_result = f"❌ 失敗：{e}"
+        has_error = True
+        print(f"[ERROR] 簽到失敗：{e}")
+
+    # ── 動畫瘋答題 ────────────────────────────────────────────────
+    print("\n========== 動畫瘋答題 ==========")
     try:
         answer, note = fetch_answer_from_blackxblue()
-        print(f"[DEBUG] 答題解析完成：答案={answer}，{note}")
-        answer_result = f"📋 動畫瘋答題：今日答案為 {answer}"
+        print(f"今日答案：{answer}（{note}）")   # note 只留在 DEBUG log
+        answer_result = (
+            f"📋 今日答案：{answer}\n"
+            f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
+        )
     except Exception as e:
-        answer_result = f"⚠️ 動畫瘋答題解析失敗：{e}"
+        answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
 
-    # --- 寄出 Email ---
-    print("=" * 40)
-    subject = f"【巴哈】{now} 簽到通知" if not has_error else f"【巴哈】{now} ❌ 簽到異常"
+    # ── 發送 Email ────────────────────────────────────────────────
+    print("\n========== 發送 Email ==========")
+    subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
         f"帳號：{username}（ID：{userid}）\n"
         f"執行時間：{now}\n"
-        f"\n"
-        f"【簽到結果】\n{signin_result}\n"
-        f"\n"
-        f"【答題】\n{answer_result}\n"
-        f"\n"
-        f"【Cookie 狀態】\n{expiry_warning}\n"
-        f"\n"
-        f"【執行紀錄】\n{log_url}"
+        f"每日簽到：{signin_result}\n"
+        + (f"{streak_info}\n" if streak_info else "")
+        + f"動畫瘋答題：{answer_result}"
+        + expiry_warning + "\n\n"
+        + f"完整 Log：{log_url}"
     )
     send_email(subject, body)
 
     if has_error:
-        raise Exception(signin_result)
+        raise Exception(f"簽到失敗：{signin_result}")
+
 
 
 if __name__ == "__main__":
