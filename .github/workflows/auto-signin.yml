@@ -1,0 +1,57 @@
+name: 巴哈姆特自動簽到
+
+on:
+  schedule:
+    # 每天台灣時間 08:10 執行（UTC+8 → UTC 00:10）
+    - cron: "10 0 * * *"
+  workflow_dispatch: # 允許手動觸發
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 執行巴哈自動簽到
+        uses: jacoblincool/bahamut-automation@latest
+        id: bahamut
+        with:
+          config: |
+            {
+              "username": "${{ secrets.BAHAMUT_USERNAME }}",
+              "password": "${{ secrets.BAHAMUT_PASSWORD }}",
+              "modules": {
+                "signin": {},
+                "answer": {}
+              }
+            }
+        continue-on-error: true
+
+      - name: 發送 Email 通知（成功）
+        if: steps.bahamut.outcome == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "✅ 巴哈簽到成功 - ${{ github.run_id }}"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_USER }}
+          body: |
+            巴哈姆特每日簽到已成功完成！
+            執行時間：${{ github.event.repository.updated_at }}
+            Workflow Run：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: 發送 Email 通知（失敗）
+        if: steps.bahamut.outcome == 'failure'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "❌ 巴哈簽到失敗 - 請手動檢查"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_USER }}
+          body: |
+            巴哈姆特每日簽到執行失敗，請至以下連結查看詳情：
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
