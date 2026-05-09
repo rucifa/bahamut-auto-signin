@@ -1,5 +1,8 @@
+# 巴哈姆特每日自動簽到 / Bahamut Auto Sign-in
 
----
+自動執行巴哈姆特每日任務的 GitHub Actions 專案，支援 Cookie 到期提醒與 Email 通知。
+
+***
 
 ## 🚀 快速開始
 
@@ -7,7 +10,7 @@
 
 點擊右上角 **Fork**，複製到你自己的 GitHub 帳號底下。
 
----
+***
 
 ### 步驟二：取得 Cookie
 
@@ -17,13 +20,13 @@
 
 **用解析工具確認內容：**
 
-- 用瀏覽器直接開啟 `Bahamut-cookie-parser.html`
+- 開啟 🔍 [Bahamut Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
 - 將複製的 Cookie 字串貼入，按「解析 Cookie」
 - 確認顯示正確帳號暱稱、會員 ID 與到期日後再繼續
 
 > ⚠️ 解析工具完全在本機瀏覽器執行，不會傳送任何資料到外部。
 
----
+***
 
 ### 步驟三：設定 GitHub Secrets
 
@@ -38,7 +41,7 @@
 
 > 💡 Gmail 應用程式密碼產生方式：Google 帳戶 → 安全性 → 兩步驟驗證 → 應用程式密碼
 
----
+***
 
 ### 步驟四：確認排程
 
@@ -46,7 +49,7 @@ Actions 設定完成後即會依排程自動執行。預設時間為每天 **台
 
 你也可以在 Actions 頁面手動點 **Run workflow** 來測試是否正常運作。
 
----
+***
 
 ## ⏱ 修改排程時間
 
@@ -61,7 +64,7 @@ on:
 
 如需更改時間，修改 cron 語法即可。可參考 [crontab.guru](https://crontab.guru/) 換算時區。
 
----
+***
 
 ## 📧 Email 通知說明
 
@@ -71,11 +74,13 @@ on:
 | Cookie 已過期 | ❌ 寄出「Cookie 已失效」緊急通知 |
 | 正常簽到成功 | 預設不寄信（可在 `signin.py` 自行開啟） |
 
----
+***
 
 ## 🔧 Cookie 解析工具（Bahamut-cookie-parser.html）
 
 這是一個純前端工具，用於解析 Cookie 並輸出可直接貼到 GitHub Secrets 的字串。
+
+> 🔗 **直接開啟：**[Bahamut Cookie 解析工具](https://htmlpreview.github.io/?https://github.com/rucifa/bahamut-auto-signin/blob/main/Bahamut-cookie-parser.html)
 
 **功能：**
 - 從 `BAHARUNE` JWT 解析帳號資訊，包含：
@@ -97,7 +102,7 @@ on:
 
 > ❌ `ckMd5`、`B_GAME_ID`、`cookie_login_new` 為舊版遺留欄位，目前登入後不一定會產生，不影響正常功能。
 
----
+***
 
 ## 🔄 Cookie 到期後更新方式
 
@@ -109,7 +114,7 @@ Cookie 有效期通常約 **30 天**，收到提醒信後請依以下步驟更�
 4. 前往 GitHub Repo → **Settings → Secrets and variables → Actions**
 5. 找到 `BAHAMUT_COOKIE`，點 **Update**，貼入新的 Cookie 字串
 
----
+***
 
 ## ⚠️ 注意事項
 
@@ -117,16 +122,17 @@ Cookie 有效期通常約 **30 天**，收到提醒信後請依以下步驟更�
 - Cookie 字串包含帳號敏感資訊，**絕對不要公開分享你的 Cookie**
 - GitHub Secrets 已加密儲存，不會在 Actions 執行紀錄中顯示
 
----
+***
 
 ## 📝 更新紀錄
 
 | 日期 | 說明 |
 |---|---|
+| 2026-05-09 | 修正 Cookie 解析工具連結為 htmlpreview 直接開啟網址 |
 | 2026-05-09 | 修正 BAHARUNE JWT 欄位解析（`userid` / `username` / `mid`），移除廢棄欄位警示 |
 | 2026-05-09 | Cookie 解析工具新增帳號資訊卡（暱稱 + 會員 ID + 帳號 + 到期日） |
 | 2026-05-09 | 初始版本建立，完成每日自動簽到與 Email 通知功能 |
 
----
+***
 
 *本工具與巴哈姆特官方無關。*
