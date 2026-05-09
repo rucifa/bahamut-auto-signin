@@ -146,57 +146,6 @@ def fetch_answer_from_blackxblue() -> str:
     raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
 
 
-def get_anime_question() -> dict:
-    # 方向一：手機 app API 端點
-    url = "https://api.gamer.com.tw/mobile_app/anime/v2/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
-    resp = requests.get(url, headers=headers, timeout=15)
-    print(f"[DEBUG] 查詢答題狀態 HTTP {resp.status_code}, body={resp.text[:200]}")
-    if resp.status_code in (403, 404):
-        return {"status": 0, "message": f"API 不通 (HTTP {resp.status_code})"}
-    resp.raise_for_status()
-    return resp.json()
-
-
-def submit_anime_answer(answer: str) -> dict:
-    # 方向一：手機 app API 端點
-    url = "https://api.gamer.com.tw/mobile_app/anime/v2/questionnaire.php"
-    headers = build_headers("https://ani.gamer.com.tw/", "https://ani.gamer.com.tw")
-    resp = requests.post(url, headers=headers, data={"answer": answer}, timeout=15)
-    print(f"[DEBUG] 提交答案 HTTP {resp.status_code}, body={resp.text[:200]}")
-    if resp.status_code in (403, 404):
-        return {"message": f"⏭️ API 不通 (HTTP {resp.status_code})"}
-    resp.raise_for_status()
-    return resp.json()
-
-
-def do_anime_answer() -> str:
-    try:
-        question_data = get_anime_question()
-
-        status = question_data.get("status", 0)
-        msg = question_data.get("message", "")
-
-        if status == 0:
-            if "已作答" in msg or "already" in msg.lower():
-                print("今日動畫瘋已答題，略過")
-                return "今日已答題（略過）"
-            if "沒有" in msg or "無題" in msg:
-                print("今日動畫瘋無題目")
-                return "今日無題目"
-            if "API 不通" in msg:
-                return f"⏭️ {msg}"
-
-        answer = fetch_answer_from_blackxblue()
-        result = submit_anime_answer(answer)
-        result_msg = result.get("message", "無回應訊息") if isinstance(result, dict) else str(result)
-        return f"✅ 答題完成（答案：{answer}），回應：{result_msg}"
-
-    except Exception as e:
-        print(f"動畫瘋答題失敗：{e}")
-        return f"❌ 答題失敗：{e}"
-
-
 # ────────────────────────────────────────────
 
 def main():
@@ -245,10 +194,15 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題 ──
+    # ── 動畫瘋答題：抓答案後通知，讓使用者手動點 ──
     print("\n========== 動畫瘋答題 ==========")
-    answer_result = do_anime_answer()
-    print(f"答題結果：{answer_result}")
+    try:
+        answer = fetch_answer_from_blackxblue()
+        answer_result = f"📋 今日答案：{answer}（請手動前往動畫瘋作答）\nhttps://ani.gamer.com.tw/"
+        print(f"答題答案：{answer}，已寫入 Email 通知")
+    except Exception as e:
+        answer_result = f"❌ 抓取答案失敗：{e}"
+        print(f"[ERROR] {answer_result}")
 
     # ── 發送 Email 通知 ──
     print("\n========== 發送 Email ==========")
