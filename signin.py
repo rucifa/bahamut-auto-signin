@@ -1,8 +1,10 @@
 import requests
 import smtplib
 import os
+import json
+import base64
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timezone
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -32,6 +34,30 @@ def get_log_url() -> str:
     if repo and run_id:
         return f"https://github.com/{repo}/actions/runs/{run_id}"
     return "https://github.com/你的帳號/你的Repo/actions"
+
+def get_cookie_expiry() -> tuple:
+    """
+    從 BAHARUNE JWT Token 解析到期時間
+    回傳 (到期日字串, 剩餘天數)
+    """
+    try:
+        for item in COOKIE.split(";"):
+            item = item.strip()
+            if item.startswith("BAHARUNE="):
+                jwt = item.split("=", 1)[1]
+                # JWT 格式：header.payload.signature
+                payload_b64 = jwt.split(".")[1]
+                # 補齊 Base64 padding
+                payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                payload = json.loads(base64.b64decode(payload_b64))
+                exp_timestamp = payload.get("exp", 0)
+                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc).astimezone()
+                now = datetime.now(tz=timezone.utc)
+                days_left = (datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) - now).days
+                return exp_dt.strftime("%Y-%m-%d"), days_left
+    except Exception as e:
+        print(f"解析 JWT 失敗：{e}")
+    return "未知", -1
 
 def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
     if method == "GET":
@@ -92,13 +118,24 @@ def do_signin():
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_url = get_log_url()  # ← 新增
+    log_url = get_log_url()
+
+    # 檢查 Cookie 到期時間
+    exp_date, days_left = get_cookie_expiry()
+    print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
+
+    # 到期提醒訊息（剩餘 7 天以內才顯示警告）
+    if days_left < 0:
+        expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
+    elif days_left <= 7:
+        expiry_warning = f"\n\n⚠️ Cookie 將於 {exp_date} 到期（剩餘 {days_left} 天），請盡快更新！"
+    else:
+        expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
 
     try:
         print("正在執行簽到...")
         url, method, data = do_signin()
 
-        # ↓ 修改：加入連續天數 + Log 連結
         if isinstance(data, dict):
             days = data.get("data", {}).get("days", "")
             days_msg = f"\n連續簽到：{days} 天" if days else ""
@@ -107,17 +144,18 @@ def main():
 
         body = (
             f"簽到時間：{now}"
-            f"{days_msg}\n\n"
+            f"{days_msg}"
+            f"{expiry_warning}\n\n"
             f"完整 Log：{log_url}"
         )
         print(f"簽到成功：{body}")
         send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
-        # ↓ 修改：失敗信加入 Log 連結
         error_msg = (
             f"簽到時間：{now}\n"
-            f"錯誤訊息：{str(e)}\n\n"
+            f"錯誤訊息：{str(e)}"
+            f"{expiry_warning}\n\n"
             f"完整 Log：{log_url}"
         )
         print(f"發生錯誤：{e}")
