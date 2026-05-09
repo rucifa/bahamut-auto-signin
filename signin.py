@@ -107,10 +107,12 @@ def fetch_answer_from_blackxblue() -> str:
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    # 基準點：2026-05-09 / sn=6331391
-    # 若日後漂移，把這兩行改成最近一次成功的日期和 sn
+    # ──────────────────────────────────────────────────────────────
+    # 基準點：若日後漂移導致找不到文章，把這兩行改成最近一次成功的值
     BASE_DATE = date(2026, 5, 9)
-    BASE_SN = 6331391
+    BASE_SN   = 6331391
+    # ──────────────────────────────────────────────────────────────
+
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     delta = (today - BASE_DATE).days
     estimated_sn = BASE_SN + delta
@@ -131,7 +133,7 @@ def fetch_answer_from_blackxblue() -> str:
         r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
     ]
 
-    # 第一輪：精確比對今天日期（±7 範圍）
+    # 第一輪：精確比對（今天日期 + 作者必須是 blackxblue，±7 sn 範圍）
     for offset in range(-7, 8):
         sn = estimated_sn + offset
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
@@ -144,9 +146,11 @@ def fetch_answer_from_blackxblue() -> str:
             continue
         content = resp.text
 
-        is_today = any(s in content for s in today_str_formats)
-        print(f"[DEBUG] sn={sn} 是今天的文章：{is_today}")
-        if not is_today:
+        is_today      = any(s in content for s in today_str_formats)
+        is_blackxblue = "blackxblue" in content
+        print(f"[DEBUG] sn={sn} 是今天：{is_today}，是 blackxblue：{is_blackxblue}")
+
+        if not is_today or not is_blackxblue:
             continue
 
         for pattern in patterns:
@@ -157,12 +161,12 @@ def fetch_answer_from_blackxblue() -> str:
                 print(f"解析到答案（精確）：{answer}，sn={sn}")
                 return answer
 
-        print(f"[DEBUG] sn={sn} 找到今日文章但解析不到答案，內容前 500 字：{content[:500]}")
+        print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案，內容前 500 字：{content[:500]}")
         raise Exception("找到今日文章但無法解析答案，格式可能已變更")
 
-    # 第二輪：日期比對失敗，改用最近 sn 只要有答案格式就用
-    print("[DEBUG] 精確日期比對失敗，改用最近 sn 寬鬆掃描...")
-    for offset in range(-3, 4):
+    # 第二輪：寬鬆比對（只確認作者是 blackxblue，±5 sn 範圍）
+    print("[DEBUG] 精確比對失敗，改用寬鬆掃描（只確認作者）...")
+    for offset in range(-5, 6):
         sn = estimated_sn + offset
         article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
         try:
@@ -172,6 +176,8 @@ def fetch_answer_from_blackxblue() -> str:
         if resp.status_code != 200:
             continue
         content = resp.text
+        if "blackxblue" not in content:
+            continue
         for pattern in patterns:
             match = re.search(pattern, content)
             if match:
@@ -180,13 +186,18 @@ def fetch_answer_from_blackxblue() -> str:
                 print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
                 return answer
 
-    raise Exception(f"在 sn {estimated_sn-7}~{estimated_sn+7} 範圍內找不到答案，請手動更新 BASE_SN")
+    raise Exception(
+        f"在 sn {estimated_sn - 7}~{estimated_sn + 7} 找不到 blackxblue 的文章，"
+        f"請手動將 BASE_DATE / BASE_SN 更新為今日正確值"
+    )
 
 
-# ────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
 
 def main():
-    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
+    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
+        "%Y-%m-%d %H:%M:%S (台灣時間)"
+    )
     log_url = get_log_url()
 
     exp_date, days_left, username, userid = get_cookie_expiry()
@@ -194,24 +205,24 @@ def main():
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
     if days_left < 0:
-        expiry_warning = "\n\n⚠️ Cookie 已過期（" + exp_date + "），請立即更新！"
+        expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
     elif days_left <= 7:
-        expiry_warning = "\n\n⚠️ Cookie 將於 " + exp_date + " 到期（剩餘 " + str(days_left) + " 天），請盡快更新！"
+        expiry_warning = f"\n\n⚠️ Cookie 將於 {exp_date} 到期（剩餘 {days_left} 天），請盡快更新！"
     else:
-        expiry_warning = "\n\nCookie 到期日：" + exp_date + "（剩餘 " + str(days_left) + " 天）"
+        expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
 
     signin_result = "未執行"
-    streak_info = ""
+    streak_info   = ""
     answer_result = "未執行"
-    has_error = False
+    has_error     = False
 
-    # ── 簽到 ──
+    # ── 簽到 ──────────────────────────────────────────────────────
     try:
         print("\n========== 簽到 ==========")
-        status_data = get_signin_status()
-        days = status_data.get("days", "?")
+        status_data    = get_signin_status()
+        days           = status_data.get("days", "?")
         already_signed = status_data.get("signin", False)
-        streak_info = f"✨ 已連續簽到 {days} 天"
+        streak_info    = f"✨ 已連續簽到 {days} 天"
         print(f"{streak_info}，今日已簽到：{already_signed}")
 
         if already_signed:
@@ -220,9 +231,9 @@ def main():
         else:
             print("正在執行簽到...")
             do_signin()
-            status_data2 = get_signin_status()
-            days = status_data2.get("days", days)
-            streak_info = f"✨ 已連續簽到 {days} 天"
+            status_data2  = get_signin_status()
+            days          = status_data2.get("days", days)
+            streak_info   = f"✨ 已連續簽到 {days} 天"
             signin_result = "✅ 成功"
             print(f"簽到完成，{streak_info}")
 
@@ -231,17 +242,20 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題：抓答案後通知手動作答 ──
+    # ── 動畫瘋答題：抓答案，通知手動作答 ─────────────────────────
     print("\n========== 動畫瘋答題 ==========")
     try:
         answer = fetch_answer_from_blackxblue()
-        answer_result = f"📋 今日答案：{answer}（請手動前往動畫瘋作答）\nhttps://ani.gamer.com.tw/"
+        answer_result = (
+            f"📋 今日答案：{answer}（請手動前往動畫瘋作答）\n"
+            f"https://ani.gamer.com.tw/"
+        )
         print(f"今日答案：{answer}")
     except Exception as e:
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
 
-    # ── 發送 Email 通知 ──
+    # ── 發送 Email ────────────────────────────────────────────────
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
@@ -253,7 +267,6 @@ def main():
         + expiry_warning + "\n\n"
         + f"完整 Log：{log_url}"
     )
-
     send_email(subject, body)
 
     if has_error:
