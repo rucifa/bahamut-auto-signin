@@ -7,6 +7,7 @@ import re
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -129,6 +130,19 @@ def cookie_str_to_list(cookie_str: str) -> list:
     return cookies
 
 
+def wait_for_cloudflare(page, timeout_ms: int = 15000):
+    """等待 Cloudflare JS Challenge 完成，直到頁面標題不再是「請稍候」"""
+    print("[PLAYWRIGHT] 等待 Cloudflare JS Challenge 完成...")
+    try:
+        page.wait_for_function(
+            "() => document.title !== '請稍候...' && document.title !== 'Just a moment...'",
+            timeout=timeout_ms
+        )
+        print(f"[PLAYWRIGHT] Cloudflare 通過，當前標題：{page.title()}")
+    except Exception:
+        print(f"[PLAYWRIGHT] 等待超時，當前標題：{page.title()}")
+
+
 def do_anime_answer_playwright() -> str:
     print("[PLAYWRIGHT] 開始初始化瀏覽器...")
 
@@ -137,13 +151,19 @@ def do_anime_answer_playwright() -> str:
             print("[PLAYWRIGHT] 啟動 Chromium...")
             browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                ]
             )
 
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 locale="zh-TW",
                 timezone_id="Asia/Taipei",
+                viewport={"width": 1280, "height": 800},
+                java_script_enabled=True,
             )
 
             all_cookies = cookie_str_to_list(COOKIE)
@@ -152,20 +172,21 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
+            # 套用 stealth 模式，隱藏自動化特徵
+            stealth_sync(page)
+            print("[PLAYWRIGHT] Stealth 模式已啟用")
+
             # ── 步驟一：導向 blackxblue 創作列表，抓最新文章 sn ──
             print("[PLAYWRIGHT] 導向 blackxblue 創作列表...")
             page.goto("https://home.gamer.com.tw/creation.php?owner=blackxblue", timeout=20000)
             page.wait_for_timeout(2000)
 
             content_html = page.content()
-            print(f"[PLAYWRIGHT] 創作列表 HTML 長度：{len(content_html)}")
-
             sn_list = re.findall(r'artwork\.php\?sn=(\d+)', content_html)
             sn_list = list(dict.fromkeys(sn_list))
-            print(f"[PLAYWRIGHT] 找到文章 sn 列表（前10）：{sn_list[:10]}")
+            print(f"[PLAYWRIGHT] 找到文章 sn 列表（前5）：{sn_list[:5]}")
 
             sn = sn_list[0] if sn_list else None
-
             if not sn:
                 browser.close()
                 return "⏭️ 跳過（無法從創作列表取得文章 sn）"
@@ -178,9 +199,7 @@ def do_anime_answer_playwright() -> str:
 
             title_match = re.search(r'<title>(.*?)</title>', content)
             print(f"[PLAYWRIGHT] 文章標題：{title_match.group(1) if title_match else '未知'}")
-            print(f"[PLAYWRIGHT] 文章內容長度：{len(content)}")
 
-            # 支援格式：A:3、A：3、答案:3、答案:A、Answer:A
             answer = None
             for pattern in [
                 r'A[:：]([1-4ABCD])',
@@ -191,25 +210,28 @@ def do_anime_answer_playwright() -> str:
                 m = re.search(pattern, content)
                 if m:
                     val = m.group(1).upper()
-                    if val in ['1', '2', '3', '4']:
-                        answer = ['A', 'B', 'C', 'D'][int(val) - 1]
-                    else:
-                        answer = val
+                    answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
                     break
 
             if not answer:
                 print(f"[PLAYWRIGHT] 文章內容前 1000 字：{content[:1000]}")
                 browser.close()
-                return "⏭️ 跳過（無法從文章解析答案，格式可能已變更）"
+                return "⏭️ 跳過（無法從文章解析答案）"
 
             print(f"[PLAYWRIGHT] 解析到答案：{answer}")
 
-            # ── 步驟三：導向到動畫瘋首頁，讓 Cloudflare 驗證通過 ──
+            # ── 步驟三：導向動畫瘋首頁，等待 Cloudflare JS 跑完 ──
             print("[PLAYWRIGHT] 導向到動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
+            wait_for_cloudflare(page, timeout_ms=20000)
             page.wait_for_timeout(2000)
-            print(f"[PLAYWRIGHT] 動畫瘋標題：{page.title()}")
+            print(f"[PLAYWRIGHT] 最終標題：{page.title()}")
             print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
+
+            # 如果還是「請稍候」代表 CF 沒過
+            if "請稍候" in page.title() or "Just a moment" in page.title():
+                browser.close()
+                return "⏭️ 跳過（Cloudflare JS Challenge 未通過）"
 
             # ── 步驟四：同源查詢今日答題狀態 ──
             print("[PLAYWRIGHT] 查詢答題狀態...")
@@ -222,7 +244,7 @@ def do_anime_answer_playwright() -> str:
                     return { status: resp.status, body: await resp.text() };
                 }
             """)
-            print(f"[PLAYWRIGHT] 查詢狀態：HTTP {status_result['status']}, body={status_result['body'][:300]}")
+            print(f"[PLAYWRIGHT] 查詢狀態：HTTP {status_result['status']}, body={status_result['body'][:200]}")
 
             if status_result['status'] == 200:
                 try:
@@ -237,6 +259,9 @@ def do_anime_answer_playwright() -> str:
                             return "今日無題目"
                 except Exception:
                     pass
+            elif status_result['status'] == 403:
+                browser.close()
+                return "⏭️ 跳過（Cloudflare 仍然攔截）"
 
             # ── 步驟五：同源提交答案 ──
             print(f"[PLAYWRIGHT] 提交答案：{answer}")
@@ -254,7 +279,7 @@ def do_anime_answer_playwright() -> str:
                 }}
             """)
 
-            print(f"[PLAYWRIGHT] 答題回應：HTTP {result['status']}, body={result['body'][:300]}")
+            print(f"[PLAYWRIGHT] 答題回應：HTTP {result['status']}, body={result['body'][:200]}")
             browser.close()
 
             if result['status'] == 200:
@@ -265,10 +290,7 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     return f"✅ 答題完成（答案：{answer}）"
             elif result['status'] == 403:
-                body_text = result['body']
-                if "系統異常" in body_text or "<!DOCTYPE" in body_text:
-                    return "⏭️ 跳過（Cloudflare 仍然攔截）"
-                return "⏭️ 跳過（HTTP 403）"
+                return "⏭️ 跳過（Cloudflare 仍然攔截）"
             else:
                 return f"⏭️ 跳過（HTTP {result['status']}）"
 
@@ -318,9 +340,8 @@ def main():
         status_data = get_signin_status()
         days = status_data.get("days", "?")
         already_signed = status_data.get("signin", False)
-        finished_ad = status_data.get("finishedAd", False)
         streak_info = f"✨ 已連續簽到 {days} 天"
-        print(f"{streak_info}，今日已簽到：{already_signed}，雙倍獎勵：{finished_ad}")
+        print(f"{streak_info}，今日已簽到：{already_signed}")
 
         if already_signed:
             print("今日已簽到，略過簽到步驟")
