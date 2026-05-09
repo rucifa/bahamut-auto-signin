@@ -103,28 +103,34 @@ def do_signin() -> dict:
 
 
 def fetch_answer_from_blackxblue() -> str:
-    list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
+    # 不用 X-Requested-With，直接抓 HTML 頁面
+    headers.pop("X-Requested-With", None)
+    headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
+    # 步驟一：抓創作列表頁面，找最新文章 sn
+    list_url = "https://home.gamer.com.tw/creation.php?owner=blackxblue"
+    print(f"[DEBUG] 抓取創作列表 → {list_url}")
     resp = requests.get(list_url, headers=headers, timeout=15)
     resp.raise_for_status()
+    print(f"[DEBUG] 創作列表 HTTP {resp.status_code}, 長度 {len(resp.text)}")
 
-    data = resp.json()
-    articles = data.get("data", [])
-    if not articles:
-        raise Exception("blackXblue 小屋沒有找到文章列表")
+    sn_list = re.findall(r'artwork\.php\?sn=(\d+)', resp.text)
+    sn_list = list(dict.fromkeys(sn_list))
+    print(f"[DEBUG] 找到 sn 列表（前5）：{sn_list[:5]}")
 
-    latest_sn = articles[0].get("sn", "")
-    if not latest_sn:
-        raise Exception("無法取得最新文章 sn")
+    if not sn_list:
+        raise Exception("無法從創作列表取得文章 sn")
 
-    print(f"最新文章 sn：{latest_sn}")
+    sn = sn_list[0]
 
-    article_url = f"https://home.gamer.com.tw/creationDetail.php?sn={latest_sn}"
+    # 步驟二：抓文章內容，解析答案
+    article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
+    print(f"[DEBUG] 抓取文章 → {article_url}")
     resp2 = requests.get(article_url, headers=headers, timeout=15)
     resp2.raise_for_status()
-
     content = resp2.text
+    print(f"[DEBUG] 文章 HTTP {resp2.status_code}, 長度 {len(content)}")
 
     patterns = [
         r'A[:：]([1-4ABCD])',
@@ -194,12 +200,12 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題：抓答案後通知，讓使用者手動點 ──
+    # ── 動畫瘋答題：抓答案後通知手動作答 ──
     print("\n========== 動畫瘋答題 ==========")
     try:
         answer = fetch_answer_from_blackxblue()
         answer_result = f"📋 今日答案：{answer}（請手動前往動畫瘋作答）\nhttps://ani.gamer.com.tw/"
-        print(f"答題答案：{answer}，已寫入 Email 通知")
+        print(f"今日答案：{answer}")
     except Exception as e:
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
