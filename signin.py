@@ -26,13 +26,14 @@ def get_csrf_token() -> str:
             return item.split("=", 1)[1]
     return ""
 
+def get_log_url() -> str:
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if repo and run_id:
+        return f"https://github.com/{repo}/actions/runs/{run_id}"
+    return "https://github.com/你的帳號/你的Repo/actions"
+
 def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
-    """
-    嘗試一個端點，回傳 (成功與否, 訊息)
-    判斷標準：
-      - 必須是 JSON 回應
-      - 不能包含 '找不到網頁' 或 '<!doctype' 等 HTML 錯誤頁
-    """
     if method == "GET":
         resp = requests.get(url, headers=headers, timeout=15)
     else:
@@ -46,17 +47,14 @@ def try_endpoint(method: str, url: str, headers: dict, csrf_token: str):
 
     text = resp.text.strip()
 
-    # 回傳 HTML 代表是錯誤頁，不是真正的 API 回應
     if text.lower().startswith("<!doctype") or "找不到網頁" in text:
         return False, "回傳 HTML 錯誤頁（端點不存在）"
 
-    # 嘗試解析 JSON
     try:
         data = resp.json()
         print(f"JSON 回應：{data}")
         return True, data
     except Exception:
-        # 非 JSON 但也不是 HTML 錯誤頁，可能是純文字成功回應
         print(f"純文字回應：{text[:100]}")
         return True, text
 
@@ -94,28 +92,33 @@ def do_signin():
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_url = get_log_url()  # ← 新增
+
     try:
         print("正在執行簽到...")
         url, method, data = do_signin()
 
-        # 精簡成功通知
+        # ↓ 修改：加入連續天數 + Log 連結
         if isinstance(data, dict):
             days = data.get("data", {}).get("days", "")
             days_msg = f"\n連續簽到：{days} 天" if days else ""
         else:
             days_msg = ""
 
-        body = f"簽到時間：{now}{days_msg}"
+        body = (
+            f"簽到時間：{now}"
+            f"{days_msg}\n\n"
+            f"完整 Log：{log_url}"
+        )
         print(f"簽到成功：{body}")
         send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
-        # 失敗時才附上詳細資訊
+        # ↓ 修改：失敗信加入 Log 連結
         error_msg = (
             f"簽到時間：{now}\n"
             f"錯誤訊息：{str(e)}\n\n"
-            f"請至 GitHub Actions 查看完整 Log：\n"
-            f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '你的帳號/你的Repo')}/actions"
+            f"完整 Log：{log_url}"
         )
         print(f"發生錯誤：{e}")
         send_email("❌ 巴哈每日簽到失敗", error_msg)
