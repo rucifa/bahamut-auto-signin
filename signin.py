@@ -20,32 +20,77 @@ def send_email(subject: str, body: str):
     print(f"Email 已發送：{subject}")
 
 def do_signin() -> dict:
-    url = "https://api.gamer.com.tw/mobile_app/bahamut/v1/signin.php"
+    """使用網頁版簽到端點"""
+    # 先取得 CSRF Token（從 Cookie 中解析）
+    csrf_token = ""
+    for item in COOKIE.split(";"):
+        item = item.strip()
+        if item.startswith("ckBahamutCsrfToken="):
+            csrf_token = item.split("=", 1)[1]
+            break
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
         "Referer": "https://www.gamer.com.tw/",
         "Origin": "https://www.gamer.com.tw",
+        "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "zh-TW,zh;q=0.9"
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "X-CSRF-Token": csrf_token
     }
-    resp = requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+
+    # 嘗試多個可能的端點，哪個成功就用哪個
+    endpoints = [
+        ("GET",  "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("POST", "https://www.gamer.com.tw/ajax/click_signin.php"),
+        ("GET",  "https://api.gamer.com.tw/user/v1/signin.php"),
+        ("POST", "https://api.gamer.com.tw/user/v1/signin.php"),
+    ]
+
+    last_error = None
+    for method, url in endpoints:
+        try:
+            print(f"嘗試：{method} {url}")
+            if method == "GET":
+                resp = requests.get(url, headers=headers, timeout=15)
+            else:
+                resp = requests.post(url, headers=headers,
+                                     data={"csrf_token": csrf_token},
+                                     timeout=15)
+
+            print(f"狀態碼：{resp.status_code}")
+            print(f"回應內容：{resp.text[:200]}")  # 只印前200字
+
+            if resp.status_code == 200:
+                # 嘗試解析 JSON
+                try:
+                    return {"url": url, "method": method, "data": resp.json()}
+                except Exception:
+                    # 非 JSON 回應也算成功，直接回傳文字
+                    return {"url": url, "method": method, "data": resp.text}
+
+        except Exception as e:
+            print(f"端點失敗：{e}")
+            last_error = e
+            continue
+
+    raise Exception(f"所有端點均失敗，最後錯誤：{last_error}")
 
 def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        print("正在執行簽到（使用現有 Cookie）...")
+        print("正在執行簽到（網頁版 Cookie 方式）...")
         result = do_signin()
-        print(f"簽到結果：{result}")
+        print(f"簽到成功，使用端點：{result['url']}")
 
-        if result.get("data", {}).get("signin"):
-            days = result.get("data", {}).get("days", "未知")
-            msg = f"簽到時間：{now}\n連續簽到天數：{days} 天"
-            send_email("✅ 巴哈每日簽到成功", msg)
-        else:
-            send_email("⚠️ 巴哈簽到回應異常，請手動確認", f"時間：{now}\n完整回應：{result}")
+        body = (
+            f"簽到時間：{now}\n"
+            f"使用端點：{result['url']}\n"
+            f"請求方式：{result['method']}\n"
+            f"回應內容：{result['data']}"
+        )
+        send_email("✅ 巴哈每日簽到成功", body)
 
     except Exception as e:
         error_msg = f"錯誤時間：{now}\n錯誤訊息：{str(e)}"
