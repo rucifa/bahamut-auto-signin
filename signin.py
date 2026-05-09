@@ -176,6 +176,7 @@ def do_anime_answer() -> str:
         return f"答題完成（答案：{answer}），回應：{result_msg}"
 
     except requests.exceptions.HTTPError as e:
+        print(f"[DEBUG] 403 回應內容：{e.response.text[:500]}")
         print(f"動畫瘋答題 API 不可用（{e}），略過")
         return f"⏭️ 跳過（{e}）"
     except Exception as e:
