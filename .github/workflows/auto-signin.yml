@@ -2,18 +2,24 @@ name: 巴哈姆特自動簽到
 
 on:
   schedule:
-    - cron: "5 16 * * *"   # UTC 16:05 = 台灣時間 00:05
-  workflow_dispatch:        # 允許手動觸發測試
+    - cron: "5 16 * * *"  # 台灣時間 00:05（UTC 16:05）
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   signin:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout 程式碼
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
-      - name: 安裝 Python 套件
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝依賴
         run: pip install requests
 
       - name: 執行簽到腳本
