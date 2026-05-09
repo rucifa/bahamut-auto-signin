@@ -4,8 +4,8 @@ import os
 import json
 import base64
 import re
+from datetime import datetime, timezone, timedelta, date
 from email.mime.text import MIMEText
-from datetime import datetime, timezone, timedelta
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -105,73 +105,62 @@ def do_signin() -> dict:
 def fetch_answer_from_blackxblue() -> str:
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
-    headers.pop("Content-Type", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    # 用 AJAX API 直接拿文章列表 JSON（需帶 Cookie）
-    api_url = "https://home.gamer.com.tw/ajax/getCreationList.php?owner=blackxblue&page=1"
-    print(f"[DEBUG] 嘗試 AJAX API → {api_url}")
-    resp = requests.get(api_url, headers=headers, timeout=15)
-    print(f"[DEBUG] AJAX API HTTP {resp.status_code}, body前200：{resp.text[:200]}")
+    # 以 2026-05-09 的 sn=6331391 為基準，每天約加 1
+    BASE_DATE = date(2026, 5, 9)
+    BASE_SN = 6331391
+    # 使用台灣時間（UTC+8）
+    today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
+    delta = (today - BASE_DATE).days
+    estimated_sn = BASE_SN + delta
+    print(f"[DEBUG] 今日台灣日期：{today}，估算 sn：{estimated_sn}")
 
-    sn = None
-
-    if resp.status_code == 200 and resp.text.strip().startswith("{"):
-        try:
-            data = resp.json()
-            items = data.get("data", data.get("items", []))
-            if items:
-                sn = str(items[0].get("sn", ""))
-                print(f"[DEBUG] 從 AJAX API 取得 sn：{sn}")
-        except Exception as e:
-            print(f"[DEBUG] AJAX API JSON 解析失敗：{e}")
-
-    # AJAX API 失敗的話，改抓 RSS Feed
-    if not sn:
-        rss_url = "https://home.gamer.com.tw/rss.php?owner=blackxblue"
-        print(f"[DEBUG] 嘗試 RSS → {rss_url}")
-        resp2 = requests.get(rss_url, headers=headers, timeout=15)
-        print(f"[DEBUG] RSS HTTP {resp2.status_code}, body前500：{resp2.text[:500]}")
-        if resp2.status_code == 200:
-            m = re.search(r'artwork\.php\?sn=(\d+)', resp2.text)
-            if not m:
-                m = re.search(r'<link>.*?sn=(\d+)', resp2.text)
-            if m:
-                sn = m.group(1)
-                print(f"[DEBUG] 從 RSS 取得 sn：{sn}")
-
-    if not sn:
-        raise Exception("無法取得最新文章 sn（AJAX API 與 RSS 均失敗）")
-
-    # 抓文章內容解析答案
-    article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
-    print(f"[DEBUG] 抓取文章 → {article_url}")
-    headers2 = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
-    headers2.pop("X-Requested-With", None)
-    headers2["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    resp3 = requests.get(article_url, headers=headers2, timeout=15)
-    resp3.raise_for_status()
-    content = resp3.text
-    print(f"[DEBUG] 文章 HTTP {resp3.status_code}, 長度 {len(content)}")
-
-    patterns = [
-        r'A[:：]([1-4ABCD])',
-        r'答案[：:是為]\s*([1-4ABCD])',
-        r'正確答案[：:]\s*([1-4ABCD])',
-        r'[Aa]nswer[：:\s]+([1-4ABCD])',
-        r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+    today_str_formats = [
+        today.strftime("%m/%d"),
+        today.strftime("%-m/%-d"),
+        today.strftime("%Y/%m/%d"),
+        today.strftime("%Y-%m-%d"),
     ]
 
-    for pattern in patterns:
-        match = re.search(pattern, content)
-        if match:
-            val = match.group(1).upper()
-            answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
-            print(f"解析到答案：{answer}")
-            return answer
+    for offset in [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5]:
+        sn = estimated_sn + offset
+        article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
+        print(f"[DEBUG] 嘗試 sn={sn}")
+        try:
+            resp = requests.get(article_url, headers=headers, timeout=15)
+        except Exception as e:
+            print(f"[DEBUG] sn={sn} 請求失敗：{e}")
+            continue
+        if resp.status_code != 200:
+            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}，跳過")
+            continue
+        content = resp.text
 
-    print(f"[DEBUG] 文章內容前 500 字：{content[:500]}")
-    raise Exception("無法從 blackXblue 文章中解析出答案，格式可能已變更")
+        is_today = any(s in content for s in today_str_formats)
+        print(f"[DEBUG] sn={sn} 是今天的文章：{is_today}")
+        if not is_today:
+            continue
+
+        patterns = [
+            r'A[:：]([1-4ABCD])',
+            r'答案[：:是為]\s*([1-4ABCD])',
+            r'正確答案[：:]\s*([1-4ABCD])',
+            r'[Aa]nswer[：:\s]+([1-4ABCD])',
+            r'選\s*([ABCD])\s*(?:是正確|為正確|答)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                val = match.group(1).upper()
+                answer = ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
+                print(f"解析到答案：{answer}")
+                return answer
+
+        print(f"[DEBUG] sn={sn} 找到今日文章但解析不到答案，內容前 500 字：{content[:500]}")
+        raise Exception("找到今日文章但無法解析答案")
+
+    raise Exception(f"在 sn {estimated_sn-5}~{estimated_sn+5} 範圍內找不到今天的 blackxblue 文章")
 
 
 # ────────────────────────────────────────────
