@@ -114,37 +114,44 @@ def do_signin() -> dict:
 
 
 def fetch_answer_from_blackxblue() -> str:
-    list_url = "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1"
-    print(f"[DEBUG] 抓取 blackxblue 文章列表...")
-    r1 = requests.get(list_url, headers=build_headers("https://home.gamer.com.tw/"), timeout=15)
+    list_url = "https://home.gamer.com.tw/creationCategory.php?owner=blackxblue&c=370818"
+    print(f"[DEBUG] 抓取 blackxblue 文章列表（HTML 版）...")
+    r1 = requests.get(list_url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://home.gamer.com.tw/",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }, timeout=15)
     print(f"[DEBUG] 文章列表 HTTP {r1.status_code}")
-    print(f"[DEBUG] 文章列表回應內容：{r1.text[:300]}")
+    print(f"[DEBUG] 文章列表回應前 200 字：{r1.text[:200]}")
     r1.raise_for_status()
-    articles = r1.json().get("data", [])
-    if not articles:
-        raise Exception("blackXblue 小屋沒有找到文章")
 
-    latest_sn = articles[0].get("sn", "")
+    sn_match = re.search(r'artwork\.php\?sn=(\d+)', r1.text)
+    if not sn_match:
+        raise Exception("無法從 creationCategory 頁面找到文章 sn")
+    latest_sn = sn_match.group(1)
     print(f"[DEBUG] 最新文章 sn：{latest_sn}")
 
     r2 = requests.get(
-        f"https://home.gamer.com.tw/creationDetail.php?sn={latest_sn}",
-        headers=build_headers("https://home.gamer.com.tw/"), timeout=15
+        f"https://home.gamer.com.tw/artwork.php?sn={latest_sn}",
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://home.gamer.com.tw/",
+            "Accept-Language": "zh-TW,zh;q=0.9",
+        }, timeout=15
     )
     print(f"[DEBUG] 文章內容 HTTP {r2.status_code}")
     r2.raise_for_status()
     content = r2.text
 
     answer = None
-    for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'[Aa]nswer[：:\s]+([ABCD])']:
+    for pattern in [r'答案[：:是為]\s*([ABCD])', r'正確答案[：:]\s*([ABCD])', r'\bA[：:]\s*([ABCD1-4])\b', r'[Aa]nswer[：:\s]+([ABCD])']:
         m = re.search(pattern, content)
         if m:
             answer = m.group(1).upper()
             break
 
     if not answer:
-        # 印出文章前 500 字幫助 debug
-        print(f"[DEBUG] 文章內容前 500 字：{content[:500]}")
+        print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
         raise Exception("無法從 blackXblue 文章解析答案，格式可能已變更")
 
     print(f"[DEBUG] 解析到答案：{answer}")
@@ -157,7 +164,6 @@ def cookie_str_to_list(cookie_str: str) -> list:
         item = item.strip()
         if "=" in item:
             name, value = item.split("=", 1)
-            # ani.gamer.com.tw 和 gamer.com.tw 都要有
             for domain in [".gamer.com.tw", ".ani.gamer.com.tw"]:
                 cookies.append({
                     "name": name.strip(),
@@ -171,7 +177,6 @@ def cookie_str_to_list(cookie_str: str) -> list:
 def do_anime_answer_playwright() -> str:
     print("[PLAYWRIGHT] 開始初始化瀏覽器...")
 
-    # 先取得答案（requests，不需要瀏覽器）
     try:
         answer = fetch_answer_from_blackxblue()
     except Exception as e:
@@ -192,24 +197,18 @@ def do_anime_answer_playwright() -> str:
                 timezone_id="Asia/Taipei",
             )
 
-            # 注入 Cookie
             all_cookies = cookie_str_to_list(COOKIE)
             context.add_cookies(all_cookies)
             print(f"[PLAYWRIGHT] 注入 {len(all_cookies)} 個 Cookie")
 
             page = context.new_page()
 
-            # 先訪問動畫瘋首頁，讓 Cloudflare 驗證通過
             print("[PLAYWRIGHT] 訪問動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
             page.wait_for_timeout(2000)
             print(f"[PLAYWRIGHT] 首頁標題：{page.title()}")
+            print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
 
-            # 檢查是否有登入
-            current_url = page.url
-            print(f"[PLAYWRIGHT] 當前 URL：{current_url}")
-
-            # 先用 GET 查詢今日答題狀態
             print("[PLAYWRIGHT] 查詢答題狀態...")
             status_result = page.evaluate("""
                 async () => {
@@ -225,7 +224,6 @@ def do_anime_answer_playwright() -> str:
             """)
             print(f"[PLAYWRIGHT] 查詢狀態：HTTP {status_result['status']}, body={status_result['body'][:300]}")
 
-            # 判斷是否已答題
             if status_result['status'] == 200:
                 try:
                     status_data = json.loads(status_result['body'])
@@ -240,7 +238,6 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     pass
 
-            # 提交答案
             print(f"[PLAYWRIGHT] 提交答案：{answer}")
             result = page.evaluate(f"""
                 async () => {{
@@ -271,7 +268,7 @@ def do_anime_answer_playwright() -> str:
                 body = result['body']
                 if "系統異常" in body or "<!DOCTYPE" in body:
                     return "⏭️ 跳過（Cloudflare 仍然攔截，即使使用瀏覽器）"
-                return f"⏭️ 跳過（HTTP 403）"
+                return "⏭️ 跳過（HTTP 403）"
             else:
                 return f"⏭️ 跳過（HTTP {result['status']}）"
 
@@ -288,7 +285,6 @@ def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
-    # ── 帳號資訊 ──
     jwt_info = parse_baharune_jwt()
     username = jwt_info["username"]
     userid = jwt_info["userid"]
@@ -297,7 +293,6 @@ def main():
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # ── Cookie 欄位驗證 ──
     missing = validate_cookie()
     if missing:
         warn_msg = f"⚠️ Cookie 缺少必要欄位：{', '.join(missing)}，請重新設定 GitHub Secrets！"
@@ -318,7 +313,6 @@ def main():
     answer_result = "未執行"
     has_error = False
 
-    # ── 簽到 ──
     try:
         print("\n========== 簽到 ==========")
         status_data = get_signin_status()
@@ -345,12 +339,10 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題 ──
     print("\n========== 動畫瘋答題 ==========")
     answer_result = do_anime_answer_playwright()
     print(f"答題結果：{answer_result}")
 
-    # ── Email 通知 ──
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
