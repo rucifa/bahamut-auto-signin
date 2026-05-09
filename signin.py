@@ -152,37 +152,32 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
-            # ── 步驟一：直接用 page.goto 取得文章列表 JSON ──
-            print("[PLAYWRIGHT] 取得 blackxblue 最新文章...")
-            page.goto(
-                "https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1",
-                timeout=15000
-            )
-            page.wait_for_timeout(1000)
-            raw = page.content()
-            print(f"[PLAYWRIGHT] 文章列表前 300 字：{raw[:300]}")
+            # ── 步驟一：導向 blackxblue 創作列表，抓最新文章 sn ──
+            print("[PLAYWRIGHT] 導向 blackxblue 創作列表...")
+            page.goto("https://home.gamer.com.tw/creation.php?owner=blackxblue", timeout=20000)
+            page.wait_for_timeout(2000)
 
-            sn = None
-            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group())
-                    articles = data.get("data", [])
-                    if articles:
-                        sn = articles[0].get("sn", "")
-                        print(f"[PLAYWRIGHT] 最新文章 sn：{sn}")
-                except Exception as e:
-                    print(f"[PLAYWRIGHT] 解析文章列表失敗：{e}")
+            content_html = page.content()
+            print(f"[PLAYWRIGHT] 創作列表 HTML 長度：{len(content_html)}")
+
+            sn_list = re.findall(r'artwork\.php\?sn=(\d+)', content_html)
+            sn_list = list(dict.fromkeys(sn_list))
+            print(f"[PLAYWRIGHT] 找到文章 sn 列表（前10）：{sn_list[:10]}")
+
+            sn = sn_list[0] if sn_list else None
 
             if not sn:
                 browser.close()
-                return "⏭️ 跳過（無法取得 blackxblue 文章列表）"
+                return "⏭️ 跳過（無法從創作列表取得文章 sn）"
 
-            # ── 步驟二：直接導向文章頁面取得內容，解析答案 ──
+            # ── 步驟二：導向文章頁面，解析答案 ──
             print(f"[PLAYWRIGHT] 取得文章內容 sn={sn}...")
             page.goto(f"https://home.gamer.com.tw/artwork.php?sn={sn}", timeout=15000)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
             content = page.content()
+
+            title_match = re.search(r'<title>(.*?)</title>', content)
+            print(f"[PLAYWRIGHT] 文章標題：{title_match.group(1) if title_match else '未知'}")
             print(f"[PLAYWRIGHT] 文章內容長度：{len(content)}")
 
             answer = None
@@ -197,7 +192,7 @@ def do_anime_answer_playwright() -> str:
                     break
 
             if not answer:
-                print(f"[PLAYWRIGHT] 文章內容前 800 字：{content[:800]}")
+                print(f"[PLAYWRIGHT] 文章內容前 1000 字：{content[:1000]}")
                 browser.close()
                 return "⏭️ 跳過（無法從文章解析答案，格式可能已變更）"
 
