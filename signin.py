@@ -118,6 +118,7 @@ def fetch_answer_from_blackxblue() -> str:
     print(f"[DEBUG] 抓取 blackxblue 文章列表...")
     r1 = requests.get(list_url, headers=build_headers("https://home.gamer.com.tw/"), timeout=15)
     print(f"[DEBUG] 文章列表 HTTP {r1.status_code}")
+    print(f"[DEBUG] 文章列表回應內容：{r1.text[:300]}")
     r1.raise_for_status()
     articles = r1.json().get("data", [])
     if not articles:
