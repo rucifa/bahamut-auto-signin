@@ -7,7 +7,6 @@ import re
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -171,9 +170,14 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
-            # 套用 stealth 模式
-            stealth(page)
-            print("[PLAYWRIGHT] Stealth 模式已啟用")
+            # 手動隱藏自動化特徵
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh', 'en'] });
+                window.chrome = { runtime: {} };
+            """)
+            print("[PLAYWRIGHT] Stealth 手動注入完成")
 
             # ── 步驟一：導向 blackxblue 創作列表，抓最新文章 sn ──
             print("[PLAYWRIGHT] 導向 blackxblue 創作列表...")
