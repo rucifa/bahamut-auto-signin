@@ -152,15 +152,18 @@ def do_anime_answer_playwright() -> str:
 
             page = context.new_page()
 
-            # ── 步驟一：從 blackxblue 用 AJAX API 取得最新文章 sn（帶 Cookie）──
+            # ── 步驟一：先導向到 home.gamer.com.tw，才能同源呼叫 AJAX ──
+            print("[PLAYWRIGHT] 導向到 home.gamer.com.tw...")
+            page.goto("https://home.gamer.com.tw/", timeout=30000)
+            page.wait_for_timeout(1500)
+            print(f"[PLAYWRIGHT] 標題：{page.title()}")
+
+            # ── 步驟二：同源取得 blackxblue 文章列表 ──
             print("[PLAYWRIGHT] 取得 blackxblue 最新文章...")
             article_result = page.evaluate("""
                 async () => {
-                    const resp = await fetch('https://home.gamer.com.tw/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1', {
-                        headers: {
-                            'Referer': 'https://home.gamer.com.tw/',
-                            'X-Requested-With': 'XMLHttpRequest',
-                        }
+                    const resp = await fetch('/ajax/getCreationArticleList.php?owner=blackxblue&c=370818&page=1', {
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
                     });
                     return { status: resp.status, body: await resp.text() };
                 }
@@ -182,13 +185,11 @@ def do_anime_answer_playwright() -> str:
                 browser.close()
                 return "⏭️ 跳過（無法取得 blackxblue 文章列表）"
 
-            # ── 步驟二：取得文章內容，解析答案 ──
+            # ── 步驟三：同源取得文章內容，解析答案 ──
             print(f"[PLAYWRIGHT] 取得文章內容 sn={sn}...")
             article_content_result = page.evaluate(f"""
                 async () => {{
-                    const resp = await fetch('https://home.gamer.com.tw/artwork.php?sn={sn}', {{
-                        headers: {{ 'Referer': 'https://home.gamer.com.tw/' }}
-                    }});
+                    const resp = await fetch('/artwork.php?sn={sn}');
                     return {{ status: resp.status, body: await resp.text() }};
                 }}
             """)
@@ -209,23 +210,20 @@ def do_anime_answer_playwright() -> str:
 
             print(f"[PLAYWRIGHT] 解析到答案：{answer}")
 
-            # ── 步驟三：訪問動畫瘋首頁，讓 Cloudflare 驗證通過 ──
-            print("[PLAYWRIGHT] 訪問動畫瘋首頁...")
+            # ── 步驟四：導向到動畫瘋首頁，讓 Cloudflare 驗證通過 ──
+            print("[PLAYWRIGHT] 導向到動畫瘋首頁...")
             page.goto("https://ani.gamer.com.tw/", timeout=30000)
             page.wait_for_timeout(2000)
-            print(f"[PLAYWRIGHT] 首頁標題：{page.title()}")
+            print(f"[PLAYWRIGHT] 動畫瘋標題：{page.title()}")
             print(f"[PLAYWRIGHT] 當前 URL：{page.url}")
 
-            # ── 步驟四：查詢今日答題狀態 ──
+            # ── 步驟五：同源查詢今日答題狀態 ──
             print("[PLAYWRIGHT] 查詢答題狀態...")
             status_result = page.evaluate("""
                 async () => {
-                    const resp = await fetch('https://ani.gamer.com.tw/ajax/questionnaire.php', {
+                    const resp = await fetch('/ajax/questionnaire.php', {
                         method: 'GET',
-                        headers: {
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'Referer': 'https://ani.gamer.com.tw/',
-                        },
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
                     });
                     return { status: resp.status, body: await resp.text() };
                 }
@@ -246,16 +244,15 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     pass
 
-            # ── 步驟五：提交答案 ──
+            # ── 步驟六：同源提交答案 ──
             print(f"[PLAYWRIGHT] 提交答案：{answer}")
             result = page.evaluate(f"""
                 async () => {{
-                    const resp = await fetch('https://ani.gamer.com.tw/ajax/questionnaire.php', {{
+                    const resp = await fetch('/ajax/questionnaire.php', {{
                         method: 'POST',
                         headers: {{
                             'Content-Type': 'application/x-www-form-urlencoded',
                             'X-Requested-With': 'XMLHttpRequest',
-                            'Referer': 'https://ani.gamer.com.tw/',
                         }},
                         body: 'answer={answer}',
                     }});
@@ -274,8 +271,8 @@ def do_anime_answer_playwright() -> str:
                 except Exception:
                     return f"✅ 答題完成（答案：{answer}）"
             elif result['status'] == 403:
-                body = result['body']
-                if "系統異常" in body or "<!DOCTYPE" in body:
+                body_text = result['body']
+                if "系統異常" in body_text or "<!DOCTYPE" in body_text:
                     return "⏭️ 跳過（Cloudflare 仍然攔截）"
                 return "⏭️ 跳過（HTTP 403）"
             else:
