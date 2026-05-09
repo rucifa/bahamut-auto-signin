@@ -4,7 +4,7 @@ import os
 import json
 import base64
 from email.mime.text import MIMEText
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
@@ -111,7 +111,7 @@ def do_signin():
     raise Exception("所有端點均失敗，請重新從瀏覽器取得 Cookie 更新 GitHub Secret")
 
 def main():
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (台灣時間)")
     log_url = get_log_url()
 
     exp_date, days_left = get_cookie_expiry()
