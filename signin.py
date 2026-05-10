@@ -129,55 +129,10 @@ def try_parse_answer(content: str) -> str | None:
 
 
 
-def try_parse_question(content: str) -> str:
+def fetch_answer_from_blackxblue() -> tuple[str, str]:
     """
-    從文章內容解析出題目與選項，回傳格式化字串供 Email 顯示
-    格式：
-      問題：XXXXX
-      1.XXXXX
-      2.XXXXX
-      3.XXXXX
-      4.XXXXX
-      A:數字
-    """
-    # 解析答案數字（用來標記正確選項）
-    answer_num = None
-    m_ans = re.search(r'A[:：]([1-4])', content)
-    if m_ans:
-        answer_num = m_ans.group(1)
-
-    # 解析題目
-    m_q = re.search(r'問題[：:]\s*(.+)', content)
-    question = m_q.group(1).strip() if m_q else None
-
-    # 解析四個選項
-    options = {}
-    for i in range(1, 5):
-        m_opt = re.search(rf'{i}[\.．]\s*(.+)', content)
-        if m_opt:
-            options[str(i)] = m_opt.group(1).strip()
-
-    if not question or len(options) < 2:
-        return ""
-
-    lines = [f"題目：{question}"]
-    for i in range(1, 5):
-        key = str(i)
-        if key in options:
-            mark = " ✅" if key == answer_num else ""
-            lines.append(f"{i}. {options[key]}{mark}")
-
-    return "\n".join(lines)
-
-
-
-def fetch_answer_from_blackxblue() -> tuple[str, str, str]:
-    """
-    透過 API 抓取 blackxblue 最新創作，解析答案與題目
-    回傳 (answer, note, question_block)
-    - answer:         答案字母 A/B/C/D
-    - note:           debug 用說明
-    - question_block: 給 Email 顯示的題目與選項，找不到時為空字串
+    透過 API 抓取 blackxblue 最新創作，解析答案
+    回傳 (answer, note)
     """
     api_url = "https://api.gamer.com.tw/home/v2/creation_list.php?owner=blackxblue&row=1"
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
@@ -225,38 +180,29 @@ def fetch_answer_from_blackxblue() -> tuple[str, str, str]:
             f"blackxblue 可能今天尚未發文"
         )
 
-    # 先嘗試從 API content 解析答案與題目
+    # 先嘗試從 API content 解析
     answer = try_parse_answer(content)
-    question_block = try_parse_question(content)
-
-    if answer and question_block:
+    if answer:
         note = f"API 直接取得，sn={csn}"
         print(f"解析到答案：{answer}，{note}")
-        return answer, note, question_block
+        return answer, note
 
     # fallback：進文章頁取得完整內容
-    print(f"[DEBUG] API content 不完整，改進文章頁 sn={csn}")
+    print(f"[DEBUG] API content 無法解析，改進文章頁 sn={csn}")
     article_url = f"https://home.gamer.com.tw/artwork.php?sn={csn}"
     try:
         resp2 = requests.get(article_url, headers=headers, timeout=15)
     except Exception as e:
         raise Exception(f"無法抓取文章頁（sn={csn}）：{e}")
 
-    article_content = resp2.text
-
-    # HTML 實體解碼與去標籤
-    article_text = re.sub(r'<[^>]+>', ' ', article_content)
-    article_text = article_text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ')
-
-    answer2 = try_parse_answer(article_text) or try_parse_answer(article_content)
-    question_block2 = try_parse_question(article_text)
-
+    article_text = re.sub(r'<[^>]+>', ' ', resp2.text)
+    answer2 = try_parse_answer(article_text) or try_parse_answer(resp2.text)
     if answer2:
         note = f"文章頁取得，sn={csn}"
         print(f"解析到答案：{answer2}，{note}")
-        return answer2, note, question_block2
+        return answer2, note
 
-    print(f"[DEBUG] 文章頁內容前 800 字：{article_content[:800]}")
+    print(f"[DEBUG] 文章頁內容前 800 字：{resp2.text[:800]}")
     raise Exception(f"找到文章（sn={csn}，標題：{title}）但無法解析答案，格式可能已變更")
 
 
@@ -326,12 +272,12 @@ def main():
     # ── 動畫瘋答題 ────────────────────────────────────────────────
     print("\n========== 動畫瘋答題 ==========")
     try:
-        answer, note, question_block = fetch_answer_from_blackxblue()
+        answer, note = fetch_answer_from_blackxblue()
         print(f"今日答案：{answer}（{note}）")
-        answer_result = f"📋 今日答案：{answer}\n"
-        if question_block:
-            answer_result += f"{question_block}\n"
-        answer_result += "請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
+        answer_result = (
+            f"📋 今日答案：{answer}\n"
+            f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
+        )
     except Exception as e:
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
@@ -344,7 +290,7 @@ def main():
         f"執行時間：{now}\n"
         f"每日簽到：{signin_result}\n"
         + (f"{streak_info}\n" if streak_info else "")
-        + f"\n動畫瘋答題：\n{answer_result}"
+        + f"動畫瘋答題：{answer_result}"
         + expiry_warning + "\n\n"
         + f"完整 Log：{log_url}"
     )
