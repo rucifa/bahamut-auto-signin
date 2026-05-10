@@ -137,88 +137,90 @@ def try_parse_answer(content: str) -> str | None:
 
 
 def fetch_answer_from_blackxblue() -> tuple[str, str]:
+    """
+    直接抓 blackxblue 創作列表頁，找今天的動漫通文章並解析答案
+    回傳 (answer, note)
+    """
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    BASE_DATE = date(2026, 5, 9)
-    BASE_SN   = 6331391
-
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
-    delta = (today - BASE_DATE).days
-    estimated_sn = BASE_SN + delta
-    print(f"[DEBUG] 今日台灣日期：{today}，估算 sn：{estimated_sn}（基準 {BASE_SN} + {delta} 天）")
-
     today_str_formats = [
         today.strftime("%m/%d"),
         today.strftime("%-m/%-d"),
         today.strftime("%Y/%m/%d"),
         today.strftime("%Y-%m-%d"),
     ]
+    print(f"[DEBUG] 今日台灣日期：{today}，比對格式：{today_str_formats}")
 
-    tried_sns = []
+    # 直接抓作者創作列表頁，找今天的動漫通文章 SN
+    list_url = "https://home.gamer.com.tw/creation.php?owner=blackxblue"
+    print(f"[DEBUG] 抓取創作列表：{list_url}")
+    try:
+        resp = requests.get(list_url, headers=headers, timeout=15)
+    except Exception as e:
+        raise Exception(f"無法抓取創作列表頁：{e}")
+    if resp.status_code != 200:
+        raise Exception(f"創作列表頁回應 HTTP {resp.status_code}")
 
-    for offset in range(-7, 8):
-        sn = estimated_sn + offset
-        tried_sns.append(sn)
-        article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
-        print(f"[DEBUG] 嘗試 sn={sn}")
-        try:
-            resp = requests.get(article_url, headers=headers, timeout=15)
-        except Exception as e:
-            print(f"[DEBUG] sn={sn} 請求失敗：{e}")
-            continue
-        if resp.status_code != 200:
-            print(f"[DEBUG] sn={sn} HTTP {resp.status_code}，跳過")
-            continue
-        content = resp.text
+    content = resp.text
 
-        is_today      = any(s in content for s in today_str_formats)
-        is_blackxblue = "blackxblue" in content
-        print(f"[DEBUG] sn={sn} 是今天：{is_today}，是 blackxblue：{is_blackxblue}")
+    # 從列表頁找今天的文章 SN（格式：artwork.php?sn=XXXXXXX）
+    # 同時確認該連結附近有今天的日期字串
+    sn_candidates = re.findall(r'artwork\.php\?sn=(\d+)', content)
+    print(f"[DEBUG] 列表頁找到 SN 候選：{sn_candidates[:10]}")
 
-        if not is_today or not is_blackxblue:
-            continue
+    # 從列表頁直接找今天日期 + SN 的對應
+    today_sn = None
+    for fmt in today_str_formats:
+        # 找到日期附近的 SN
+        pattern = rf'artwork\.php\?sn=(\d+)[^<]*?(?:[\s\S]{{0,300}}?){re.escape(fmt)}'
+        m = re.search(pattern, content)
+        if m:
+            today_sn = m.group(1)
+            print(f"[DEBUG] 從列表頁找到今天（{fmt}）對應 SN={today_sn}")
+            break
+        # 反向：先有日期再有 SN
+        pattern2 = rf'{re.escape(fmt)}(?:[\s\S]{{0,300}}?)artwork\.php\?sn=(\d+)'
+        m2 = re.search(pattern2, content)
+        if m2:
+            today_sn = m2.group(1)
+            print(f"[DEBUG] 從列表頁找到今天（{fmt}）對應 SN={today_sn}（反向）")
+            break
 
-        title  = extract_title(content)
-        answer = try_parse_answer(content)
-        print(f"[DEBUG] sn={sn} 文章標題：{title}")
+    if not today_sn and sn_candidates:
+        # fallback：直接取列表頁第一篇（最新的），再進去確認是否今天
+        today_sn = sn_candidates[0]
+        print(f"[DEBUG] 無法從列表頁精確比對日期，改用最新文章 SN={today_sn}")
 
-        if answer:
-            print(f"解析到答案（精確）：{answer}，sn={sn}")
-            return answer, f"精確比對，sn={sn}"
+    if not today_sn:
+        raise Exception("創作列表頁無法找到任何文章 SN")
 
-        print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案")
-        print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
-        raise Exception(f"找到今日文章（sn={sn}，標題：{title}）但無法解析答案，格式可能已變更")
+    # 進入文章頁解析答案
+    article_url = f"https://home.gamer.com.tw/artwork.php?sn={today_sn}"
+    print(f"[DEBUG] 進入文章頁：{article_url}")
+    try:
+        resp2 = requests.get(article_url, headers=headers, timeout=15)
+    except Exception as e:
+        raise Exception(f"無法抓取文章頁（sn={today_sn}）：{e}")
+    if resp2.status_code != 200:
+        raise Exception(f"文章頁回應 HTTP {resp2.status_code}（sn={today_sn}）")
 
-    print(f"[DEBUG] 精確比對失敗（嘗試過：{tried_sns}），改用寬鬆掃描...")
-    for offset in range(-5, 6):
-        sn = estimated_sn + offset
-        article_url = f"https://home.gamer.com.tw/artwork.php?sn={sn}"
-        try:
-            resp = requests.get(article_url, headers=headers, timeout=15)
-        except Exception:
-            continue
-        if resp.status_code != 200:
-            continue
-        content = resp.text
-        if "blackxblue" not in content:
-            continue
+    article_content = resp2.text
+    is_today = any(s in article_content for s in today_str_formats)
+    is_blackxblue = "blackxblue" in article_content
+    title = extract_title(article_content)
+    print(f"[DEBUG] sn={today_sn} 標題：{title}，是今天：{is_today}，是blackxblue：{is_blackxblue}")
 
-        title  = extract_title(content)
-        answer = try_parse_answer(content)
-        print(f"[DEBUG] 寬鬆掃描 sn={sn} 標題：{title}")
+    answer = try_parse_answer(article_content)
+    if answer:
+        note = f"列表頁定位，sn={today_sn}"
+        print(f"解析到答案：{answer}，{note}")
+        return answer, note
 
-        if answer:
-            print(f"解析到答案（寬鬆）：{answer}，sn={sn}")
-            return answer, f"⚠️ 寬鬆比對（日期未命中），sn={sn}，標題：{title}"
-
-    raise Exception(
-        f"在 sn {estimated_sn - 7}~{estimated_sn + 7} 找不到 blackxblue 的文章\n"
-        f"嘗試過的 sn：{tried_sns}\n"
-        f"請手動將 BASE_DATE={today} / BASE_SN=??? 更新為今日正確值"
-    )
+    print(f"[DEBUG] 文章內容前 800 字：{article_content[:800]}")
+    raise Exception(f"找到文章（sn={today_sn}，標題：{title}）但無法解析答案，格式可能已變更")
 
 
 
