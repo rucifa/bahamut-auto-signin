@@ -137,20 +137,12 @@ def try_parse_answer(content: str) -> str | None:
 
 
 def fetch_answer_from_blackxblue() -> tuple[str, str]:
-    """
-    回傳 (answer, note)
-    answer: 答案字母 A/B/C/D
-    note:   附加說明，例如使用了寬鬆比對、命中的 sn
-    """
     headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
     headers.pop("X-Requested-With", None)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-    # ──────────────────────────────────────────────────────────────
-    # 基準點：若日後漂移導致找不到文章，把這兩行改成最近一次成功的值
     BASE_DATE = date(2026, 5, 9)
     BASE_SN   = 6331391
-    # ──────────────────────────────────────────────────────────────
 
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     delta = (today - BASE_DATE).days
@@ -166,7 +158,6 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
 
     tried_sns = []
 
-    # ── 第一輪：精確比對（今天日期 + blackxblue，±7 sn 範圍）──────
     for offset in range(-7, 8):
         sn = estimated_sn + offset
         tried_sns.append(sn)
@@ -197,12 +188,10 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
             print(f"解析到答案（精確）：{answer}，sn={sn}")
             return answer, f"精確比對，sn={sn}"
 
-        # 找到文章但 regex 全不匹配
         print(f"[DEBUG] sn={sn} 找到 blackxblue 今日文章但解析不到答案")
         print(f"[DEBUG] 文章內容前 800 字：{content[:800]}")
         raise Exception(f"找到今日文章（sn={sn}，標題：{title}）但無法解析答案，格式可能已變更")
 
-    # ── 第二輪：寬鬆比對（只確認 blackxblue，±5 sn 範圍）─────────
     print(f"[DEBUG] 精確比對失敗（嘗試過：{tried_sns}），改用寬鬆掃描...")
     for offset in range(-5, 6):
         sn = estimated_sn + offset
@@ -233,9 +222,6 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
 
 
 
-# ─────────────────────────────────────────────────────────────────
-
-
 def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
         "%Y-%m-%d %H:%M:%S (台灣時間)"
@@ -245,6 +231,20 @@ def main():
     exp_date, days_left, username, userid = get_cookie_expiry()
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
+
+    # ── CSRF Token 提前檢查 ──────────────────────────────────────
+    csrf = get_csrf_token()
+    print(f"[DEBUG] CSRF Token：{'有值' if csrf else '❌ 缺失'}")
+    if not csrf:
+        body = (
+            f"帳號：{username}（ID：{userid}）\n"
+            f"執行時間：{now}\n\n"
+            f"❌ Cookie 中缺少 ckBahamutCsrfToken，簽到無法執行。\n\n"
+            f"請重新複製 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
+            f"完整 Log：{log_url}"
+        )
+        send_email("❌ 巴哈簽到失敗：CSRF Token 缺失", body)
+        raise Exception("CSRF Token 缺失，請更新 Cookie")
 
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
@@ -288,7 +288,7 @@ def main():
     print("\n========== 動畫瘋答題 ==========")
     try:
         answer, note = fetch_answer_from_blackxblue()
-        print(f"今日答案：{answer}（{note}）")   # note 只留在 DEBUG log
+        print(f"今日答案：{answer}（{note}）")
         answer_result = (
             f"📋 今日答案：{answer}\n"
             f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
