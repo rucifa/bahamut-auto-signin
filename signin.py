@@ -4,7 +4,6 @@ import os
 import json
 import base64
 import re
-import uuid
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
@@ -68,21 +67,67 @@ def get_baharune() -> str:
 
 
 
-def generate_csrf_token() -> str:
-    """生成一個 UUID 格式的 CSRF Token（巴哈前端也是這樣生成的）"""
-    token = str(uuid.uuid4())
-    print(f"[DEBUG] 生成 CSRF Token：{token}")
-    return token
+def fetch_csrf_token_from_api(baharune: str) -> str:
+    """
+    呼叫巴哈 CSRF Token API 取得合法 token
+    """
+    urls_to_try = [
+        "https://api.gamer.com.tw/ajax/csrf_token.php",
+        "https://www.gamer.com.tw/ajax/csrf_token.php",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Cookie": COOKIE,
+        "Referer": "https://www.gamer.com.tw/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    for url in urls_to_try:
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            print(f"[DEBUG] CSRF API ({url}) 回應 HTTP {resp.status_code}")
+            print(f"[DEBUG] CSRF API 回應內容：{resp.text[:300]}")
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    token = (
+                        data.get("data", {}).get("token", "")
+                        or data.get("token", "")
+                        or data.get("csrf_token", "")
+                    )
+                    if token:
+                        print(f"[DEBUG] 取得合法 CSRF Token：{token[:10]}...")
+                        return token
+                except Exception:
+                    pass
+                # 嘗試從純文字回應取 token
+                m = re.search(r'["\']?token["\']?\s*[=:]\s*["\']([a-zA-Z0-9_\-]{10,})["\']', resp.text)
+                if m:
+                    token = m.group(1)
+                    print(f"[DEBUG] 從文字解析 CSRF Token：{token[:10]}...")
+                    return token
+        except Exception as e:
+            print(f"[DEBUG] CSRF API {url} 失敗：{e}")
+
+    # 最終備援：從 Cookie 中取既有值
+    for item in COOKIE.split(";"):
+        item = item.strip()
+        if item.startswith("ckBahamutCsrfToken="):
+            token = item.split("=", 1)[1]
+            print(f"[DEBUG] 使用 Cookie 中的既有 CSRF Token：{token[:10]}...")
+            return token
+
+    return ""
 
 
 
 def build_cookie_header(csrf_token: str) -> str:
-    """把 CSRF Token 注入 Cookie header，覆蓋舊的 ckBahamutCsrfToken"""
     parts = []
     for item in COOKIE.split(";"):
         item = item.strip()
         if item.startswith("ckBahamutCsrfToken="):
-            continue  # 跳過舊的
+            continue
         if item:
             parts.append(item)
     parts.append(f"ckBahamutCsrfToken={csrf_token}")
@@ -246,7 +291,6 @@ def main():
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # ── 確認 BAHARUNE 存在 ───────────────────────────────────────
     baharune = get_baharune()
     if not baharune:
         body = (
@@ -258,8 +302,20 @@ def main():
         send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
         raise Exception("BAHARUNE 缺失，請更新 Cookie")
 
-    # ── 自己生成 CSRF Token ──────────────────────────────────────
-    csrf_token = generate_csrf_token()
+    # ── 從 API 取得合法 CSRF Token ───────────────────────────────
+    csrf_token = fetch_csrf_token_from_api(baharune)
+    print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
+
+    if not csrf_token:
+        body = (
+            f"帳號：{username}（ID：{userid}）\n"
+            f"執行時間：{now}\n\n"
+            f"❌ 無法取得 CSRF Token，BAHARUNE 可能已失效（被強制登出）。\n\n"
+            f"請重新登入巴哈，複製新的 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
+            f"完整 Log：{log_url}"
+        )
+        send_email("❌ 巴哈簽到失敗：請重新登入並更新 Cookie", body)
+        raise Exception("無法取得 CSRF Token，請重新登入並更新 Cookie")
 
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
