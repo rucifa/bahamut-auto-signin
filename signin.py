@@ -7,13 +7,10 @@ import re
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
-
 COOKIE = os.environ["BAHAMUT_COOKIE"]
 EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 EMAIL_TO = os.environ["EMAIL_TO"]
-
-
 
 def send_email(subject: str, body: str):
     msg = MIMEText(body, "plain", "utf-8")
@@ -25,16 +22,12 @@ def send_email(subject: str, body: str):
         smtp.send_message(msg)
     print(f"Email 已發送：{subject}")
 
-
-
 def get_log_url() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if repo and run_id:
         return f"https://github.com/{repo}/actions/runs/{run_id}"
     return "https://github.com/rucifa/bahamut-auto-signin/actions"
-
-
 
 def get_cookie_expiry() -> tuple:
     try:
@@ -56,8 +49,6 @@ def get_cookie_expiry() -> tuple:
         print(f"解析 JWT 失敗：{e}")
     return "未知", -1, "未知", "未知"
 
-
-
 def get_baharune() -> str:
     for item in COOKIE.split(";"):
         item = item.strip()
@@ -65,16 +56,7 @@ def get_baharune() -> str:
             return item.split("=", 1)[1]
     return ""
 
-
-
 def fetch_csrf_token_from_api(baharune: str) -> str:
-    """
-    呼叫巴哈 CSRF Token API 取得合法 token
-    """
-    urls_to_try = [
-        "https://api.gamer.com.tw/ajax/csrf_token.php",
-        "https://www.gamer.com.tw/ajax/csrf_token.php",
-    ]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
@@ -83,12 +65,19 @@ def fetch_csrf_token_from_api(baharune: str) -> str:
         "Accept-Language": "zh-TW,zh;q=0.9",
         "X-Requested-With": "XMLHttpRequest",
     }
+
+    # 第一層：嘗試 API 端點
+    urls_to_try = [
+        "https://api.gamer.com.tw/ajax/csrf_token.php",
+        "https://www.gamer.com.tw/ajax/csrf_token.php",
+    ]
     for url in urls_to_try:
         try:
             resp = requests.get(url, headers=headers, timeout=15)
             print(f"[DEBUG] CSRF API ({url}) 回應 HTTP {resp.status_code}")
             print(f"[DEBUG] CSRF API 回應內容：{resp.text[:300]}")
-            if resp.status_code == 200:
+            # 過濾掉回傳 HTML 頁面的情況（長度超過 500 字元幾乎確定是 HTML）
+            if resp.status_code == 200 and len(resp.text) < 500:
                 try:
                     data = resp.json()
                     token = (
@@ -101,7 +90,6 @@ def fetch_csrf_token_from_api(baharune: str) -> str:
                         return token
                 except Exception:
                     pass
-                # 嘗試從純文字回應取 token
                 m = re.search(r'["\']?token["\']?\s*[=:]\s*["\']([a-zA-Z0-9_\-]{10,})["\']', resp.text)
                 if m:
                     token = m.group(1)
@@ -110,7 +98,18 @@ def fetch_csrf_token_from_api(baharune: str) -> str:
         except Exception as e:
             print(f"[DEBUG] CSRF API {url} 失敗：{e}")
 
-    # 最終備援：從 Cookie 中取既有值
+    # 第二層：解析首頁 <meta name="csrf-token"> 
+    try:
+        resp = requests.get("https://www.gamer.com.tw/", headers=headers, timeout=15)
+        m = re.search(r'<meta name="csrf-token" content="([^"]+)"', resp.text)
+        if m:
+            token = m.group(1)
+            print(f"[DEBUG] 從首頁 meta 取得 CSRF Token：{token[:10]}...")
+            return token
+    except Exception as e:
+        print(f"[DEBUG] 首頁 meta CSRF 解析失敗：{e}")
+
+    # 第三層（最終備援）：從 Cookie 中取既有值
     for item in COOKIE.split(";"):
         item = item.strip()
         if item.startswith("ckBahamutCsrfToken="):
@@ -119,8 +118,6 @@ def fetch_csrf_token_from_api(baharune: str) -> str:
             return token
 
     return ""
-
-
 
 def build_cookie_header(csrf_token: str) -> str:
     parts = []
@@ -132,8 +129,6 @@ def build_cookie_header(csrf_token: str) -> str:
             parts.append(item)
     parts.append(f"ckBahamutCsrfToken={csrf_token}")
     return "; ".join(parts)
-
-
 
 def build_headers(csrf_token: str,
                   referer: str = "https://www.gamer.com.tw/",
@@ -149,8 +144,6 @@ def build_headers(csrf_token: str,
         "Accept-Language": "zh-TW,zh;q=0.9",
         "X-CSRF-Token": csrf_token,
     }
-
-
 
 def get_signin_status(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
@@ -169,8 +162,6 @@ def get_signin_status(csrf_token: str) -> dict:
         raise Exception(result["error"].get("message", "未知錯誤"))
     return result.get("data", {})
 
-
-
 def do_signin(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 執行簽到 → POST {url}")
@@ -188,8 +179,6 @@ def do_signin(csrf_token: str) -> dict:
         raise Exception(result["error"].get("message", "未知錯誤"))
     return result.get("data", result)
 
-
-
 def try_parse_answer(content: str) -> str | None:
     patterns = [
         r'A[:：]([1-4ABCD])',
@@ -205,10 +194,9 @@ def try_parse_answer(content: str) -> str | None:
             return ['A', 'B', 'C', 'D'][int(val) - 1] if val in ['1', '2', '3', '4'] else val
     return None
 
-
-
 def fetch_answer_from_blackxblue() -> tuple[str, str]:
-    api_url = "https://api.gamer.com.tw/home/v2/creation_list.php?owner=blackxblue&row=1"
+    # 改為抓 3 篇，提高找到今天文章的機率
+    api_url = "https://api.gamer.com.tw/home/v2/creation_list.php?owner=blackxblue&row=3"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         "Cookie": COOKIE,
@@ -240,21 +228,30 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
     if not items:
         raise Exception("API 回傳列表為空")
 
-    item = items[0]
-    csn     = item.get("csn", "未知")
-    title   = item.get("title", "")
-    content = item.get("content", "")
-    ctime   = item.get("ctime", "")
-    print(f"[DEBUG] 最新文章 sn={csn}，標題={title}，時間={ctime}")
-    print(f"[DEBUG] content 內容：{content[:300]}")
+    # 從多篇文章中尋找今天的
+    today_item = None
+    for item in items:
+        title = item.get("title", "")
+        content = item.get("content", "")
+        ctime = item.get("ctime", "")
+        csn = item.get("csn", "未知")
+        print(f"[DEBUG] 檢查文章 sn={csn}，標題={title}，時間={ctime}")
+        if any(s in title or s in content for s in today_str_formats):
+            today_item = item
+            print(f"[DEBUG] 找到今天的文章：sn={csn}，標題={title}")
+            break
 
-    is_today = any(s in title or s in content for s in today_str_formats)
-    print(f"[DEBUG] 是今天的文章：{is_today}")
-    if not is_today:
+    if today_item is None:
+        latest = items[0]
         raise Exception(
-            f"最新文章不是今天（{today}）的，sn={csn}，標題={title}，時間={ctime}\n"
+            f"最新文章不是今天（{today}）的，sn={latest.get('csn')}，"
+            f"標題={latest.get('title')}，時間={latest.get('ctime')}\n"
             f"blackxblue 可能今天尚未發文"
         )
+
+    csn = today_item.get("csn", "未知")
+    title = today_item.get("title", "")
+    content = today_item.get("content", "")
 
     answer = try_parse_answer(content)
     if answer:
@@ -279,8 +276,6 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
     print(f"[DEBUG] 文章頁內容前 800 字：{resp2.text[:800]}")
     raise Exception(f"找到文章（sn={csn}，標題：{title}）但無法解析答案，格式可能已變更")
 
-
-
 def main():
     now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
         "%Y-%m-%d %H:%M:%S (台灣時間)"
@@ -302,7 +297,7 @@ def main():
         send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
         raise Exception("BAHARUNE 缺失，請更新 Cookie")
 
-    # ── 從 API 取得合法 CSRF Token ───────────────────────────────
+    # ── 從 API 取得合法 CSRF Token ──────────────────────────────
     csrf_token = fetch_csrf_token_from_api(baharune)
     print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
 
@@ -325,29 +320,30 @@ def main():
         expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
 
     signin_result = "未執行"
-    streak_info   = ""
+    streak_info = ""
     answer_result = "未執行"
-    has_error     = False
+    has_error = False
 
-    # ── 簽到 ──────────────────────────────────────────────────────
+    # ── 簽到 ────────────────────────────────────────────────────
     try:
         print("\n========== 簽到 ==========")
-        status_data    = get_signin_status(csrf_token)
-        days           = status_data.get("days", "?")
+        status_data = get_signin_status(csrf_token)
+        days = status_data.get("days", "?")
         already_signed = status_data.get("signin", False)
-        streak_info    = f"✨ 已連續簽到 {days} 天"
+        streak_info = f"✨ 已連續簽到 {days} 天"
         print(f"{streak_info}，今日已簽到：{already_signed}")
 
         if already_signed:
-            print("今日已簽到，略過簽到步驟")
-            signin_result = "✅ 今日已簽到"
+            # 明確區分：執行前已簽到（非本次自動簽到）
+            print("今日已簽到（執行前已完成，非本次自動觸發）")
+            signin_result = "✅ 今日已簽到（執行前已完成，非本次自動觸發）"
         else:
             print("正在執行簽到...")
             do_signin(csrf_token)
-            status_data2  = get_signin_status(csrf_token)
-            days          = status_data2.get("days", days)
-            streak_info   = f"✨ 已連續簽到 {days} 天"
-            signin_result = "✅ 成功"
+            status_data2 = get_signin_status(csrf_token)
+            days = status_data2.get("days", days)
+            streak_info = f"✨ 已連續簽到 {days} 天"
+            signin_result = "✅ 本次自動簽到成功"
             print(f"簽到完成，{streak_info}")
 
     except Exception as e:
@@ -355,7 +351,7 @@ def main():
         has_error = True
         print(f"[ERROR] 簽到失敗：{e}")
 
-    # ── 動畫瘋答題 ────────────────────────────────────────────────
+    # ── 動畫瘋答題 ──────────────────────────────────────────────
     print("\n========== 動畫瘋答題 ==========")
     try:
         answer, note = fetch_answer_from_blackxblue()
@@ -368,7 +364,7 @@ def main():
         answer_result = f"❌ 抓取答案失敗：{e}"
         print(f"[ERROR] {answer_result}")
 
-    # ── 發送 Email ────────────────────────────────────────────────
+    # ── 發送 Email ──────────────────────────────────────────────
     print("\n========== 發送 Email ==========")
     subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
     body = (
@@ -384,8 +380,6 @@ def main():
 
     if has_error:
         raise Exception(f"簽到失敗：{signin_result}")
-
-
 
 if __name__ == "__main__":
     main()
