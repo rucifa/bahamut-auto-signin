@@ -59,7 +59,6 @@ def get_cookie_expiry() -> tuple:
 
 
 def get_baharune() -> str:
-    """從 COOKIE 字串中取出 BAHARUNE 的值"""
     for item in COOKIE.split(";"):
         item = item.strip()
         if item.startswith("BAHARUNE="):
@@ -70,32 +69,37 @@ def get_baharune() -> str:
 
 def fetch_fresh_csrf_token(baharune: str) -> str:
     """
-    用 BAHARUNE 訪問巴哈首頁，從 Set-Cookie 取得最新的 ckBahamutCsrfToken
-    回傳最新 token，失敗則回傳空字串
+    用 requests.Session + BAHARUNE 訪問巴哈首頁
+    從 session.cookies 取得最新的 ckBahamutCsrfToken
     """
-    url = "https://www.gamer.com.tw/"
-    headers = {
+    session = requests.Session()
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Cookie": f"BAHARUNE={baharune}",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-TW,zh;q=0.9",
-    }
+    })
+    session.cookies.set("BAHARUNE", baharune, domain="www.gamer.com.tw")
+
     try:
-        resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        resp = session.get("https://www.gamer.com.tw/", timeout=15, allow_redirects=True)
         print(f"[DEBUG] 首頁回應 HTTP {resp.status_code}")
-        # 從 Set-Cookie header 取得最新 CSRF Token
-        for cookie_str in resp.headers.get("Set-Cookie", "").split(","):
-            m = re.search(r'ckBahamutCsrfToken=([^;]+)', cookie_str)
-            if m:
-                token = m.group(1).strip()
-                print(f"[DEBUG] 從 Set-Cookie 取得新 CSRF Token：{token[:10]}...")
-                return token
-        # 備援：從回應頁面的 HTML 找
-        m2 = re.search(r'ckBahamutCsrfToken["\s:=]+([a-zA-Z0-9_\-]+)', resp.text)
-        if m2:
-            token = m2.group(1).strip()
+        print(f"[DEBUG] Session cookies：{dict(session.cookies)}")
+
+        # 從 session cookie jar 取得
+        token = session.cookies.get("ckBahamutCsrfToken")
+        if token:
+            print(f"[DEBUG] 從 session cookies 取得新 CSRF Token：{token[:10]}...")
+            return token
+
+        # 備援：從 HTML 找
+        m = re.search(r'ckBahamutCsrfToken["\s:=\']+([a-zA-Z0-9_\-]{10,})', resp.text)
+        if m:
+            token = m.group(1).strip()
             print(f"[DEBUG] 從 HTML 取得 CSRF Token：{token[:10]}...")
             return token
+
+        print(f"[DEBUG] HTML 片段（前 500 字）：{resp.text[:500]}")
+
     except Exception as e:
         print(f"[DEBUG] 取得 CSRF Token 失敗：{e}")
     return ""
@@ -227,122 +231,4 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
         raise Exception(f"無法抓取文章頁（sn={csn}）：{e}")
 
     article_text = re.sub(r'<[^>]+>', ' ', resp2.text)
-    answer2 = try_parse_answer(article_text) or try_parse_answer(resp2.text)
-    if answer2:
-        note = f"文章頁取得，sn={csn}"
-        print(f"解析到答案：{answer2}，{note}")
-        return answer2, note
-
-    print(f"[DEBUG] 文章頁內容前 800 字：{resp2.text[:800]}")
-    raise Exception(f"找到文章（sn={csn}，標題：{title}）但無法解析答案，格式可能已變更")
-
-
-
-def main():
-    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
-        "%Y-%m-%d %H:%M:%S (台灣時間)"
-    )
-    log_url = get_log_url()
-
-    exp_date, days_left, username, userid = get_cookie_expiry()
-    print(f"帳號：{username}（ID：{userid}）")
-    print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
-
-    # ── 自動取得最新 CSRF Token ──────────────────────────────────
-    baharune = get_baharune()
-    if not baharune:
-        body = (
-            f"帳號：{username}（ID：{userid}）\n"
-            f"執行時間：{now}\n\n"
-            f"❌ Cookie 中缺少 BAHARUNE，請重新複製 Cookie 並更新 GitHub Secrets。\n\n"
-            f"完整 Log：{log_url}"
-        )
-        send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
-        raise Exception("BAHARUNE 缺失，請更新 Cookie")
-
-    csrf_token = fetch_fresh_csrf_token(baharune)
-    print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
-
-    if not csrf_token:
-        body = (
-            f"帳號：{username}（ID：{userid}）\n"
-            f"執行時間：{now}\n\n"
-            f"❌ 無法從巴哈首頁取得 CSRF Token，可能是 BAHARUNE 已失效。\n\n"
-            f"請重新複製 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
-            f"完整 Log：{log_url}"
-        )
-        send_email("❌ 巴哈簽到失敗：CSRF Token 無法取得", body)
-        raise Exception("無法取得 CSRF Token，請更新 Cookie")
-
-    if days_left < 0:
-        expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
-    elif days_left <= 7:
-        expiry_warning = f"\n\n⚠️ Cookie 將於 {exp_date} 到期（剩餘 {days_left} 天），請盡快更新！"
-    else:
-        expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
-
-    signin_result = "未執行"
-    streak_info   = ""
-    answer_result = "未執行"
-    has_error     = False
-
-    # ── 簽到 ──────────────────────────────────────────────────────
-    try:
-        print("\n========== 簽到 ==========")
-        status_data    = get_signin_status(csrf_token)
-        days           = status_data.get("days", "?")
-        already_signed = status_data.get("signin", False)
-        streak_info    = f"✨ 已連續簽到 {days} 天"
-        print(f"{streak_info}，今日已簽到：{already_signed}")
-
-        if already_signed:
-            print("今日已簽到，略過簽到步驟")
-            signin_result = "✅ 今日已簽到"
-        else:
-            print("正在執行簽到...")
-            do_signin(csrf_token)
-            status_data2  = get_signin_status(csrf_token)
-            days          = status_data2.get("days", days)
-            streak_info   = f"✨ 已連續簽到 {days} 天"
-            signin_result = "✅ 成功"
-            print(f"簽到完成，{streak_info}")
-
-    except Exception as e:
-        signin_result = f"❌ 失敗：{e}"
-        has_error = True
-        print(f"[ERROR] 簽到失敗：{e}")
-
-    # ── 動畫瘋答題 ────────────────────────────────────────────────
-    print("\n========== 動畫瘋答題 ==========")
-    try:
-        answer, note = fetch_answer_from_blackxblue()
-        print(f"今日答案：{answer}（{note}）")
-        answer_result = (
-            f"📋 今日答案：{answer}\n"
-            f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
-        )
-    except Exception as e:
-        answer_result = f"❌ 抓取答案失敗：{e}"
-        print(f"[ERROR] {answer_result}")
-
-    # ── 發送 Email ────────────────────────────────────────────────
-    print("\n========== 發送 Email ==========")
-    subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
-    body = (
-        f"帳號：{username}（ID：{userid}）\n"
-        f"執行時間：{now}\n"
-        f"每日簽到：{signin_result}\n"
-        + (f"{streak_info}\n" if streak_info else "")
-        + f"動畫瘋答題：{answer_result}"
-        + expiry_warning + "\n\n"
-        + f"完整 Log：{log_url}"
-    )
-    send_email(subject, body)
-
-    if has_error:
-        raise Exception(f"簽到失敗：{signin_result}")
-
-
-
-if __name__ == "__main__":
-    main()
+    answer2 = try_parse_an
