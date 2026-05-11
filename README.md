@@ -82,3 +82,19 @@ Cookie（`BAHARUNE`）有效期約 **30 天**。
 ---
 
 ## Email 通知範例
+帳號：拂曉的明星（ID：rucifa）
+執行時間：2026-05-11 05:00:00 (台灣時間)
+每日簽到：✅ 成功
+✨ 已連續簽到 261 天
+動畫瘋答題：📋 今日答案：A
+請手動前往動畫瘋作答：https://ani.gamer.com.tw/
+
+Cookie 到期日：2026-05-25（剩餘 14 天）
+
+---
+
+## 注意事項
+
+- 動畫瘋答題答案來源為 [blackxblue 的創作列表](https://home.gamer.com.tw/creation.php?owner=blackxblue)，需在發文後才能抓到答案（通常凌晨發布）
+- 答案僅供參考，請自行前往 [ani.gamer.com.tw](https://ani.gamer.com.tw/) 作答
+- GitHub Actions cron 排程可能延遲 10～30 分鐘，屬正常現象
