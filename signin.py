@@ -4,7 +4,7 @@ import os
 import json
 import base64
 import re
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
 
@@ -46,9 +46,9 @@ def get_cookie_expiry() -> tuple:
                 payload_b64 += "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.b64decode(payload_b64))
                 exp_timestamp = payload.get("exp", 0)
-                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc).astimezone()
                 now = datetime.now(tz=timezone.utc)
                 days_left = (datetime.fromtimestamp(exp_timestamp, tz=timezone.utc) - now).days
+                exp_dt = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
                 username = payload.get("username", "未知")
                 userid = payload.get("userid", payload.get("uid", "未知"))
                 return exp_dt.strftime("%Y-%m-%d"), days_left, username, userid
@@ -58,16 +58,52 @@ def get_cookie_expiry() -> tuple:
 
 
 
-def get_csrf_token() -> str:
+def get_baharune() -> str:
+    """從 COOKIE 字串中取出 BAHARUNE 的值"""
     for item in COOKIE.split(";"):
         item = item.strip()
-        if item.startswith("ckBahamutCsrfToken="):
+        if item.startswith("BAHARUNE="):
             return item.split("=", 1)[1]
     return ""
 
 
 
-def build_headers(referer: str = "https://www.gamer.com.tw/",
+def fetch_fresh_csrf_token(baharune: str) -> str:
+    """
+    用 BAHARUNE 訪問巴哈首頁，從 Set-Cookie 取得最新的 ckBahamutCsrfToken
+    回傳最新 token，失敗則回傳空字串
+    """
+    url = "https://www.gamer.com.tw/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Cookie": f"BAHARUNE={baharune}",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        print(f"[DEBUG] 首頁回應 HTTP {resp.status_code}")
+        # 從 Set-Cookie header 取得最新 CSRF Token
+        for cookie_str in resp.headers.get("Set-Cookie", "").split(","):
+            m = re.search(r'ckBahamutCsrfToken=([^;]+)', cookie_str)
+            if m:
+                token = m.group(1).strip()
+                print(f"[DEBUG] 從 Set-Cookie 取得新 CSRF Token：{token[:10]}...")
+                return token
+        # 備援：從回應頁面的 HTML 找
+        m2 = re.search(r'ckBahamutCsrfToken["\s:=]+([a-zA-Z0-9_\-]+)', resp.text)
+        if m2:
+            token = m2.group(1).strip()
+            print(f"[DEBUG] 從 HTML 取得 CSRF Token：{token[:10]}...")
+            return token
+    except Exception as e:
+        print(f"[DEBUG] 取得 CSRF Token 失敗：{e}")
+    return ""
+
+
+
+def build_headers(csrf_token: str,
+                  referer: str = "https://www.gamer.com.tw/",
                   origin: str = "https://www.gamer.com.tw") -> dict:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
@@ -78,15 +114,15 @@ def build_headers(referer: str = "https://www.gamer.com.tw/",
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9",
-        "X-CSRF-Token": get_csrf_token(),
+        "X-CSRF-Token": csrf_token,
     }
 
 
 
-def get_signin_status() -> dict:
+def get_signin_status(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 查詢簽到狀態 → POST {url}")
-    resp = requests.post(url, headers=build_headers(), data={"action": "2"}, timeout=15)
+    resp = requests.post(url, headers=build_headers(csrf_token), data={"action": "2"}, timeout=15)
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
@@ -97,10 +133,10 @@ def get_signin_status() -> dict:
 
 
 
-def do_signin() -> dict:
+def do_signin(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 執行簽到 → POST {url}")
-    resp = requests.post(url, headers=build_headers(), data={"action": "1"}, timeout=15)
+    resp = requests.post(url, headers=build_headers(csrf_token), data={"action": "1"}, timeout=15)
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
@@ -112,7 +148,6 @@ def do_signin() -> dict:
 
 
 def try_parse_answer(content: str) -> str | None:
-    """對 content 套用所有 regex，成功則回傳答案字母，否則回傳 None"""
     patterns = [
         r'A[:：]([1-4ABCD])',
         r'答案[：:是為]\s*([1-4ABCD])',
@@ -130,14 +165,14 @@ def try_parse_answer(content: str) -> str | None:
 
 
 def fetch_answer_from_blackxblue() -> tuple[str, str]:
-    """
-    透過 API 抓取 blackxblue 最新創作，解析答案
-    回傳 (answer, note)
-    """
     api_url = "https://api.gamer.com.tw/home/v2/creation_list.php?owner=blackxblue&row=1"
-    headers = build_headers("https://home.gamer.com.tw/", "https://home.gamer.com.tw")
-    headers.pop("X-Requested-With", None)
-    headers["Accept"] = "application/json, text/plain, */*"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Cookie": COOKIE,
+        "Referer": "https://home.gamer.com.tw/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9",
+    }
 
     today = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).date()
     today_str_formats = [
@@ -159,7 +194,6 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
     data = resp.json()
     items = data.get("data", {}).get("list", [])
     print(f"[DEBUG] API 回傳文章數：{len(items)}")
-
     if not items:
         raise Exception("API 回傳列表為空")
 
@@ -173,21 +207,18 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
 
     is_today = any(s in title or s in content for s in today_str_formats)
     print(f"[DEBUG] 是今天的文章：{is_today}")
-
     if not is_today:
         raise Exception(
             f"最新文章不是今天（{today}）的，sn={csn}，標題={title}，時間={ctime}\n"
             f"blackxblue 可能今天尚未發文"
         )
 
-    # 先嘗試從 API content 解析
     answer = try_parse_answer(content)
     if answer:
         note = f"API 直接取得，sn={csn}"
         print(f"解析到答案：{answer}，{note}")
         return answer, note
 
-    # fallback：進文章頁取得完整內容
     print(f"[DEBUG] API content 無法解析，改進文章頁 sn={csn}")
     article_url = f"https://home.gamer.com.tw/artwork.php?sn={csn}"
     try:
@@ -217,19 +248,31 @@ def main():
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # ── CSRF Token 提前檢查 ──────────────────────────────────────
-    csrf = get_csrf_token()
-    print(f"[DEBUG] CSRF Token：{'有值' if csrf else '❌ 缺失'}")
-    if not csrf:
+    # ── 自動取得最新 CSRF Token ──────────────────────────────────
+    baharune = get_baharune()
+    if not baharune:
         body = (
             f"帳號：{username}（ID：{userid}）\n"
             f"執行時間：{now}\n\n"
-            f"❌ Cookie 中缺少 ckBahamutCsrfToken，簽到無法執行。\n\n"
+            f"❌ Cookie 中缺少 BAHARUNE，請重新複製 Cookie 並更新 GitHub Secrets。\n\n"
+            f"完整 Log：{log_url}"
+        )
+        send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
+        raise Exception("BAHARUNE 缺失，請更新 Cookie")
+
+    csrf_token = fetch_fresh_csrf_token(baharune)
+    print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
+
+    if not csrf_token:
+        body = (
+            f"帳號：{username}（ID：{userid}）\n"
+            f"執行時間：{now}\n\n"
+            f"❌ 無法從巴哈首頁取得 CSRF Token，可能是 BAHARUNE 已失效。\n\n"
             f"請重新複製 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
             f"完整 Log：{log_url}"
         )
-        send_email("❌ 巴哈簽到失敗：CSRF Token 缺失", body)
-        raise Exception("CSRF Token 缺失，請更新 Cookie")
+        send_email("❌ 巴哈簽到失敗：CSRF Token 無法取得", body)
+        raise Exception("無法取得 CSRF Token，請更新 Cookie")
 
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
@@ -246,7 +289,7 @@ def main():
     # ── 簽到 ──────────────────────────────────────────────────────
     try:
         print("\n========== 簽到 ==========")
-        status_data    = get_signin_status()
+        status_data    = get_signin_status(csrf_token)
         days           = status_data.get("days", "?")
         already_signed = status_data.get("signin", False)
         streak_info    = f"✨ 已連續簽到 {days} 天"
@@ -257,8 +300,8 @@ def main():
             signin_result = "✅ 今日已簽到"
         else:
             print("正在執行簽到...")
-            do_signin()
-            status_data2  = get_signin_status()
+            do_signin(csrf_token)
+            status_data2  = get_signin_status(csrf_token)
             days          = status_data2.get("days", days)
             streak_info   = f"✨ 已連續簽到 {days} 天"
             signin_result = "✅ 成功"
