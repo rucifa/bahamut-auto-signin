@@ -231,4 +231,122 @@ def fetch_answer_from_blackxblue() -> tuple[str, str]:
         raise Exception(f"無法抓取文章頁（sn={csn}）：{e}")
 
     article_text = re.sub(r'<[^>]+>', ' ', resp2.text)
-    answer2 = try_parse_an
+    answer2 = try_parse_answer(article_text) or try_parse_answer(resp2.text)
+    if answer2:
+        note = f"文章頁取得，sn={csn}"
+        print(f"解析到答案：{answer2}，{note}")
+        return answer2, note
+
+    print(f"[DEBUG] 文章頁內容前 800 字：{resp2.text[:800]}")
+    raise Exception(f"找到文章（sn={csn}，標題：{title}）但無法解析答案，格式可能已變更")
+
+
+
+def main():
+    now = (datetime.now(tz=timezone.utc) + timedelta(hours=8)).strftime(
+        "%Y-%m-%d %H:%M:%S (台灣時間)"
+    )
+    log_url = get_log_url()
+
+    exp_date, days_left, username, userid = get_cookie_expiry()
+    print(f"帳號：{username}（ID：{userid}）")
+    print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
+
+    # ── 自動取得最新 CSRF Token ──────────────────────────────────
+    baharune = get_baharune()
+    if not baharune:
+        body = (
+            f"帳號：{username}（ID：{userid}）\n"
+            f"執行時間：{now}\n\n"
+            f"❌ Cookie 中缺少 BAHARUNE，請重新複製 Cookie 並更新 GitHub Secrets。\n\n"
+            f"完整 Log：{log_url}"
+        )
+        send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
+        raise Exception("BAHARUNE 缺失，請更新 Cookie")
+
+    csrf_token = fetch_fresh_csrf_token(baharune)
+    print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
+
+    if not csrf_token:
+        body = (
+            f"帳號：{username}（ID：{userid}）\n"
+            f"執行時間：{now}\n\n"
+            f"❌ 無法從巴哈首頁取得 CSRF Token，可能是 BAHARUNE 已失效。\n\n"
+            f"請重新複製 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
+            f"完整 Log：{log_url}"
+        )
+        send_email("❌ 巴哈簽到失敗：CSRF Token 無法取得", body)
+        raise Exception("無法取得 CSRF Token，請更新 Cookie")
+
+    if days_left < 0:
+        expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
+    elif days_left <= 7:
+        expiry_warning = f"\n\n⚠️ Cookie 將於 {exp_date} 到期（剩餘 {days_left} 天），請盡快更新！"
+    else:
+        expiry_warning = f"\n\nCookie 到期日：{exp_date}（剩餘 {days_left} 天）"
+
+    signin_result = "未執行"
+    streak_info   = ""
+    answer_result = "未執行"
+    has_error     = False
+
+    # ── 簽到 ──────────────────────────────────────────────────────
+    try:
+        print("\n========== 簽到 ==========")
+        status_data    = get_signin_status(csrf_token)
+        days           = status_data.get("days", "?")
+        already_signed = status_data.get("signin", False)
+        streak_info    = f"✨ 已連續簽到 {days} 天"
+        print(f"{streak_info}，今日已簽到：{already_signed}")
+
+        if already_signed:
+            print("今日已簽到，略過簽到步驟")
+            signin_result = "✅ 今日已簽到"
+        else:
+            print("正在執行簽到...")
+            do_signin(csrf_token)
+            status_data2  = get_signin_status(csrf_token)
+            days          = status_data2.get("days", days)
+            streak_info   = f"✨ 已連續簽到 {days} 天"
+            signin_result = "✅ 成功"
+            print(f"簽到完成，{streak_info}")
+
+    except Exception as e:
+        signin_result = f"❌ 失敗：{e}"
+        has_error = True
+        print(f"[ERROR] 簽到失敗：{e}")
+
+    # ── 動畫瘋答題 ────────────────────────────────────────────────
+    print("\n========== 動畫瘋答題 ==========")
+    try:
+        answer, note = fetch_answer_from_blackxblue()
+        print(f"今日答案：{answer}（{note}）")
+        answer_result = (
+            f"📋 今日答案：{answer}\n"
+            f"請手動前往動畫瘋作答：https://ani.gamer.com.tw/"
+        )
+    except Exception as e:
+        answer_result = f"❌ 抓取答案失敗：{e}"
+        print(f"[ERROR] {answer_result}")
+
+    # ── 發送 Email ────────────────────────────────────────────────
+    print("\n========== 發送 Email ==========")
+    subject = "✅ 巴哈每日任務完成" if not has_error else "⚠️ 巴哈每日任務部分失敗"
+    body = (
+        f"帳號：{username}（ID：{userid}）\n"
+        f"執行時間：{now}\n"
+        f"每日簽到：{signin_result}\n"
+        + (f"{streak_info}\n" if streak_info else "")
+        + f"動畫瘋答題：{answer_result}"
+        + expiry_warning + "\n\n"
+        + f"完整 Log：{log_url}"
+    )
+    send_email(subject, body)
+
+    if has_error:
+        raise Exception(f"簽到失敗：{signin_result}")
+
+
+
+if __name__ == "__main__":
+    main()
