@@ -2,7 +2,7 @@ name: Bahamut Auto Sign-in
 
 on:
   schedule:
-    - cron: '10 16 * * *'
+    - cron: '0 21 * * *'   # 台灣時間 05:00（UTC 21:00）
   workflow_dispatch:
 
 jobs:
@@ -19,9 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests playwright
-          playwright install chromium
-          playwright install-deps chromium
+          pip install requests
 
       - name: Run signin
         env:
