@@ -4,6 +4,7 @@ import os
 import json
 import base64
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
@@ -67,42 +68,25 @@ def get_baharune() -> str:
 
 
 
-def fetch_fresh_csrf_token(baharune: str) -> str:
-    """
-    用 requests.Session + BAHARUNE 訪問巴哈首頁
-    從 session.cookies 取得最新的 ckBahamutCsrfToken
-    """
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9",
-    })
-    session.cookies.set("BAHARUNE", baharune, domain="www.gamer.com.tw")
+def generate_csrf_token() -> str:
+    """生成一個 UUID 格式的 CSRF Token（巴哈前端也是這樣生成的）"""
+    token = str(uuid.uuid4())
+    print(f"[DEBUG] 生成 CSRF Token：{token}")
+    return token
 
-    try:
-        resp = session.get("https://www.gamer.com.tw/", timeout=15, allow_redirects=True)
-        print(f"[DEBUG] 首頁回應 HTTP {resp.status_code}")
-        print(f"[DEBUG] Session cookies：{dict(session.cookies)}")
 
-        # 從 session cookie jar 取得
-        token = session.cookies.get("ckBahamutCsrfToken")
-        if token:
-            print(f"[DEBUG] 從 session cookies 取得新 CSRF Token：{token[:10]}...")
-            return token
 
-        # 備援：從 HTML 找
-        m = re.search(r'ckBahamutCsrfToken["\s:=\']+([a-zA-Z0-9_\-]{10,})', resp.text)
-        if m:
-            token = m.group(1).strip()
-            print(f"[DEBUG] 從 HTML 取得 CSRF Token：{token[:10]}...")
-            return token
-
-        print(f"[DEBUG] HTML 片段（前 500 字）：{resp.text[:500]}")
-
-    except Exception as e:
-        print(f"[DEBUG] 取得 CSRF Token 失敗：{e}")
-    return ""
+def build_cookie_header(csrf_token: str) -> str:
+    """把 CSRF Token 注入 Cookie header，覆蓋舊的 ckBahamutCsrfToken"""
+    parts = []
+    for item in COOKIE.split(";"):
+        item = item.strip()
+        if item.startswith("ckBahamutCsrfToken="):
+            continue  # 跳過舊的
+        if item:
+            parts.append(item)
+    parts.append(f"ckBahamutCsrfToken={csrf_token}")
+    return "; ".join(parts)
 
 
 
@@ -111,7 +95,7 @@ def build_headers(csrf_token: str,
                   origin: str = "https://www.gamer.com.tw") -> dict:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        "Cookie": COOKIE,
+        "Cookie": build_cookie_header(csrf_token),
         "Referer": referer,
         "Origin": origin,
         "Content-Type": "application/x-www-form-urlencoded",
@@ -126,7 +110,12 @@ def build_headers(csrf_token: str,
 def get_signin_status(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 查詢簽到狀態 → POST {url}")
-    resp = requests.post(url, headers=build_headers(csrf_token), data={"action": "2"}, timeout=15)
+    resp = requests.post(
+        url,
+        headers=build_headers(csrf_token),
+        data={"action": "2", "bahamutCsrfToken": csrf_token},
+        timeout=15
+    )
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
@@ -140,7 +129,12 @@ def get_signin_status(csrf_token: str) -> dict:
 def do_signin(csrf_token: str) -> dict:
     url = "https://www.gamer.com.tw/ajax/signin.php"
     print(f"[DEBUG] 執行簽到 → POST {url}")
-    resp = requests.post(url, headers=build_headers(csrf_token), data={"action": "1"}, timeout=15)
+    resp = requests.post(
+        url,
+        headers=build_headers(csrf_token),
+        data={"action": "1", "bahamutCsrfToken": csrf_token},
+        timeout=15
+    )
     print(f"[DEBUG] 回應 HTTP {resp.status_code}")
     resp.raise_for_status()
     result = resp.json()
@@ -252,7 +246,7 @@ def main():
     print(f"帳號：{username}（ID：{userid}）")
     print(f"Cookie 到期日：{exp_date}，剩餘 {days_left} 天")
 
-    # ── 自動取得最新 CSRF Token ──────────────────────────────────
+    # ── 確認 BAHARUNE 存在 ───────────────────────────────────────
     baharune = get_baharune()
     if not baharune:
         body = (
@@ -264,19 +258,8 @@ def main():
         send_email("❌ 巴哈簽到失敗：BAHARUNE 缺失", body)
         raise Exception("BAHARUNE 缺失，請更新 Cookie")
 
-    csrf_token = fetch_fresh_csrf_token(baharune)
-    print(f"[DEBUG] CSRF Token：{'有值' if csrf_token else '❌ 無法取得'}")
-
-    if not csrf_token:
-        body = (
-            f"帳號：{username}（ID：{userid}）\n"
-            f"執行時間：{now}\n\n"
-            f"❌ 無法從巴哈首頁取得 CSRF Token，可能是 BAHARUNE 已失效。\n\n"
-            f"請重新複製 Cookie 並更新 GitHub Secrets 的 BAHAMUT_COOKIE。\n\n"
-            f"完整 Log：{log_url}"
-        )
-        send_email("❌ 巴哈簽到失敗：CSRF Token 無法取得", body)
-        raise Exception("無法取得 CSRF Token，請更新 Cookie")
+    # ── 自己生成 CSRF Token ──────────────────────────────────────
+    csrf_token = generate_csrf_token()
 
     if days_left < 0:
         expiry_warning = f"\n\n⚠️ Cookie 已過期（{exp_date}），請立即更新！"
